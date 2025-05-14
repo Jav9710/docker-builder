@@ -17,15 +17,15 @@ jobs:
       - name: Crear Dockerfile dinámico
         run: |
           echo '
-          FROM python:3.12-slim
+          FROM pytorch/pytorch:2.5.1-cuda12.1-cudnn9-runtime
 
           WORKDIR /app
-          RUN apt-get update && apt-get install -y git libgl1-mesa-glx libglib2.0-0 && rm -rf /var/lib/apt/lists/*
-
+          RUN apt-get update && apt-get install -y git libgl1 libgl1-mesa-glx libglib2.0-0 && rm -rf /var/lib/apt/lists/*
+          RUN apk add --no-cache mesa-gle
           RUN git clone https://github.com/exo-explore/exo.git /app
           WORKDIR /app
           RUN pip install -e .
-          RUN pip uninstall opencv-python && pip install opencv-python-headless protobuf==5.27.2
+          RUN pip install opencv-python-headless protobuf==5.27.2 tensorflow==2.19.0
 
           CMD ["python"]
           ' > Dockerfile
