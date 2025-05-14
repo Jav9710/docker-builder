@@ -21,7 +21,6 @@ jobs:
 
           WORKDIR /app
           RUN apt-get update && apt-get install -y git libgl1 libgl1-mesa-glx libglib2.0-0 && rm -rf /var/lib/apt/lists/*
-          RUN apk add --no-cache mesa-gl
           RUN git clone https://github.com/exo-explore/exo.git /app
           WORKDIR /app
           RUN pip install -e .
