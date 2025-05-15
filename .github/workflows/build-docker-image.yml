@@ -17,16 +17,43 @@ jobs:
       - name: Crear Dockerfile dinámico
         run: |
           echo '
-          FROM pytorch/pytorch:2.5.1-cuda12.1-cudnn9-runtime
-
-          WORKDIR /app
-          RUN apt-get update && apt-get install -y git libgl1 libgl1-mesa-glx libglib2.0-0 && rm -rf /var/lib/apt/lists/*
-          RUN git clone https://github.com/exo-explore/exo.git /app
-          WORKDIR /app
-          RUN pip install -e .
-          RUN pip install opencv-python-headless protobuf==5.27.2 tensorflow==2.19.0
-
-          CMD ["python"]
+            FROM pytorch/pytorch:2.5.1-cuda12.1-cudnn9-runtime
+            
+            # Instala Miniconda
+            ENV CONDA_DIR /opt/conda
+            ENV PATH=$CONDA_DIR/bin:$PATH
+            
+            RUN apt-get update && apt-get install -y \
+                git \
+                wget \
+                libgl1 \
+                libgl1-mesa-glx \
+                libglib2.0-0 \
+                && rm -rf /var/lib/apt/lists/*
+            
+            # Instalar Miniconda
+            RUN wget --quiet https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -O ~/miniconda.sh && \
+                bash ~/miniconda.sh -b -p $CONDA_DIR && \
+                rm ~/miniconda.sh && \
+                conda clean -afy
+            
+            # Crear entorno conda
+            RUN conda create -n exo-env python=3.11.10 -y
+            
+            # Activar entorno y hacer que sea el predeterminado
+            SHELL ["conda", "run", "-n", "exo-env", "/bin/bash", "-c"]
+            
+            # Clonar repositorio
+            WORKDIR /app
+            RUN git clone https://github.com/exo-explore/exo.git /app
+            
+            # Instalar dependencias en el entorno
+            RUN pip install -e .
+            RUN pip install opencv-python-headless protobuf==5.27.2 tensorflow==2.19.0
+            
+            # Hacer que se active el entorno conda por defecto al entrar al contenedor
+            ENTRYPOINT [ "conda", "run", "--no-capture-output", "-n", "exo-env", "bash" ]
+            
           ' > Dockerfile
 
       - name: Construir imagen Docker
