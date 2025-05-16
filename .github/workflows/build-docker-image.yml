@@ -61,6 +61,11 @@ jobs:
           IMAGE_SIZE_MB=$(echo "scale=2; $IMAGE_SIZE / 1024 / 1024" | bc)
           echo "Tamaño de la imagen: ${IMAGE_SIZE_MB} MB"
           
+      - name: Mostrar espacio libre en disco antes de guardar
+        run: |
+          echo "Espacio libre en disco (en GB):"
+          df -h .          
+          
       - name: Exportar imagen Docker como .tar.gz
         run: |
           docker save ${{ github.event.inputs.image_tag }} | gzip > exo_image.tar.gz
