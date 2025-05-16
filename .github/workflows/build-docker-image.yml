@@ -13,13 +13,16 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      - name: Verificar espacio libre en disco
+        run: |
+          echo "Espacio disponible en disco antes de construir la imagen:"
+          df -h
 
       - name: Crear Dockerfile dinámico
         run: |
           echo '
             FROM pytorch/pytorch:2.5.1-cuda12.1-cudnn9-runtime
             
-            # Instala Miniconda
             ENV CONDA_DIR /opt/conda
             ENV PATH=$CONDA_DIR/bin:$PATH
             
@@ -31,47 +34,46 @@ jobs:
                 libglib2.0-0 \
                 && rm -rf /var/lib/apt/lists/*
             
-            # Crear entorno conda
             RUN conda create -n exo-env python=3.11.10 -y
             
-            # Activar entorno y hacer que sea el predeterminado
             SHELL ["conda", "run", "-n", "exo-env", "/bin/bash", "-c"]
             
-            # Clonar repositorio
             WORKDIR /app
             RUN git clone https://github.com/exo-explore/exo.git /app
             
-            # Instalar dependencias en el entorno
             RUN pip install -e .
             RUN pip install opencv-python-headless protobuf==5.27.2 tensorflow==2.19.0
             
-            # Hacer que se active el entorno conda por defecto al entrar al contenedor
             ENTRYPOINT [ "conda", "run", "--no-capture-output", "-n", "exo-env", "bash" ]
-            
           ' > Dockerfile
 
       - name: Construir imagen Docker
         run: |
           docker build -t ${{ github.event.inputs.image_tag }} .
-          
+
+      - name: Eliminar imagen base de PyTorch para liberar espacio
+        run: |
+          docker rmi pytorch/pytorch:2.5.1-cuda12.1-cudnn9-runtime || true
+
       - name: Mostrar tamaño de la imagen Docker
         run: |
           IMAGE_ID=$(docker images --format="{{.Repository}}:{{.Tag}} {{.ID}}" | grep "${{ github.event.inputs.image_tag }}" | awk '{print $2}')
           IMAGE_SIZE=$(docker image inspect $IMAGE_ID --format='{{.Size}}')
           IMAGE_SIZE_MB=$(echo "scale=2; $IMAGE_SIZE / 1024 / 1024" | bc)
           echo "Tamaño de la imagen: ${IMAGE_SIZE_MB} MB"
-          
-      - name: Mostrar espacio libre en disco antes de guardar
+
+      - name: Instalar zstd para compresión agresiva
         run: |
-          echo "Espacio libre en disco (en GB):"
-          df -h .          
-          
-      - name: Exportar imagen Docker como .tar.gz
+          sudo apt-get update
+          sudo apt-get install -y zstd
+
+      - name: Comprimir imagen Docker usando zstd
         run: |
-          docker save ${{ github.event.inputs.image_tag }} | gzip > exo_image.tar.gz
+          docker save ${{ github.event.inputs.image_tag }} | zstd -19 -T0 -o exo_image.tar.zst
+          ls -lh exo_image.tar.zst
 
       - name: Subir artifact (imagen Docker comprimida)
         uses: actions/upload-artifact@v4
         with:
           name: exo-docker-image
-          path: exo_image.tar.gz
+          path: exo_image.tar.zst
