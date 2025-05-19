@@ -23,26 +23,35 @@ jobs:
           echo '
             FROM pytorch/pytorch:2.5.1-cuda12.1-cudnn9-runtime
             
+            # Configuración básica
             ENV CONDA_DIR /opt/conda
             ENV PATH=$CONDA_DIR/bin:$PATH
             
+            # Instalar dependencias del sistema
             RUN apt-get update && apt-get install -y \
                 git \
                 wget \
                 libgl1 \
-                libgl1-mesa-glx \
                 libglib2.0-0 \
+                build-essential \
                 && rm -rf /var/lib/apt/lists/*
             
-            RUN conda create -n exo-env python=3.11.10 -y
+            # Crear y configurar entorno conda
+            RUN conda create -n exo-env python=3.11.10 -y && \
+                conda install -n exo-env -c conda-forge gxx_linux-64=11.3.0 -y
             
+            # Configurar el shell para usar conda
             SHELL ["conda", "run", "-n", "exo-env", "/bin/bash", "-c"]
             
+            # Instalar exo
             WORKDIR /app
-            RUN git clone https://github.com/exo-explore/exo.git /app
+            RUN git clone https://github.com/exo-explore/exo.git /app && \
+                pip install -e . && \
+                pip install opencv-python-headless protobuf==5.27.2 tensorflow==2.19.0
             
-            RUN pip install -e .
-            RUN pip install opencv-python-headless protobuf==5.27.2 tensorflow==2.19.0
+            # Limpiar caché para reducir tamaño de imagen
+            RUN conda clean -afy && \
+                pip cache purge
             
             ENTRYPOINT [ "conda", "run", "--no-capture-output", "-n", "exo-env", "bash" ]
           ' > Dockerfile
