@@ -43,8 +43,7 @@ jobs:
                 pip install opencv-python-headless protobuf==5.27.2 tensorflow==2.19.0
             
             # Limpiar caché para reducir tamaño de imagen
-            RUN conda clean -afy && \
-                pip cache purge
+            RUN pip cache purge
             
             ENTRYPOINT [ "sh", "-c", "bash" ]
           ' > Dockerfile
