@@ -21,12 +21,8 @@ jobs:
       - name: Crear Dockerfile dinámico
         run: |
           echo '
-            FROM pytorch/pytorch:2.7.0-cuda11.8-cudnn9-runtime
-            
-            # Configuración básica
-            ENV CONDA_DIR /opt/conda
-            ENV PATH=$CONDA_DIR/bin:$PATH
-            
+            FROM python:3.11-alpine3.21
+           
             # Instalar dependencias del sistema
             RUN apt-get update && apt-get install -y \
                 git \
@@ -36,24 +32,18 @@ jobs:
                 build-essential \
                 && rm -rf /var/lib/apt/lists/*
             
-            # Crear y configurar entorno conda
-            RUN conda create -n exo-env python=3.11.10 -y && \
-                conda install -n exo-env -c conda-forge gxx_linux-64=11.3.0 -y
-            
-            # Configurar el shell para usar conda
-            SHELL ["conda", "run", "-n", "exo-env", "/bin/bash", "-c"]
-            
             # Instalar exo
             WORKDIR /app
             RUN git clone https://github.com/exo-explore/exo.git /app && \
                 pip install -e . && \
+                source install.sh && \
                 pip install opencv-python-headless protobuf==5.27.2 tensorflow==2.19.0
             
             # Limpiar caché para reducir tamaño de imagen
             RUN conda clean -afy && \
                 pip cache purge
             
-            ENTRYPOINT [ "conda", "run", "--no-capture-output", "-n", "exo-env", "bash" ]
+            ENTRYPOINT [ "sh", "-c", "bash" ]
           ' > Dockerfile
 
       - name: Construir imagen Docker
@@ -62,7 +52,7 @@ jobs:
 
       - name: Eliminar imagen base de PyTorch para liberar espacio
         run: |
-          docker rmi pytorch/pytorch:2.5.1-cuda12.1-cudnn9-runtime || true
+          docker rmi python:3.11-alpine3.21 || true
 
       - name: Mostrar tamaño de la imagen Docker
         run: |
