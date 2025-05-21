@@ -21,7 +21,7 @@ jobs:
       - name: Crear Dockerfile dinámico
         run: |
           echo '
-            FROM pytorch/pytorch:2.5.1-cuda12.1-cudnn9-runtime
+            FROM pytorch/pytorch:2.7.0-cuda11.8-cudnn9-runtime
             
             # Configuración básica
             ENV CONDA_DIR /opt/conda
