@@ -64,10 +64,6 @@ jobs:
         run: |
           docker rmi pytorch/pytorch:2.5.1-cuda12.1-cudnn9-runtime || true
 
-      - name: Correr la imagen 
-        run: |
-          docker run -it ${{ github.event.inputs.image_tag }} exo
-
       - name: Mostrar tamaño de la imagen Docker
         run: |
           IMAGE_ID=$(docker images --format="{{.Repository}}:{{.Tag}} {{.ID}}" | grep "${{ github.event.inputs.image_tag }}" | awk '{print $2}')
