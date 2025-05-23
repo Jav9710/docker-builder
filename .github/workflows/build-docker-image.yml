@@ -40,7 +40,7 @@ jobs:
             RUN git clone https://github.com/exo-explore/exo.git /app && \
                 pip install -e . && \
                 source install.sh && \
-                pip install opencv-python-headless protobuf==5.27.2 tensorflow==2.19.0
+                pip install opencv-python-headless protobuf==5.27.2
             
             # Limpiar caché para reducir tamaño de imagen
             RUN pip cache purge
