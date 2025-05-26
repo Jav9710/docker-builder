@@ -14,54 +14,55 @@ jobs:
 
     steps:
       - name: Verificar espacio libre en disco
-        run: |
-          echo "Espacio disponible en disco antes de construir la imagen:"
-          df -h
+        run: df -h
 
       - name: Crear Dockerfile dinámico
         run: |
-          echo '
-            FROM python:3.12.10-alpine3.21
-           
-            # Instalar dependencias del sistema
-            RUN apk add --no-cache \
-                git \
-                wget \
-                bash \
-                libstdc++ \
-                make \
-                gcc \
-                g++ \
-                linux-headers \
-                musl-dev
-                
-            # Instalar exo
-            WORKDIR /app
-            RUN git clone https://github.com/exo-explore/exo.git /app && \
-                pip install -e . && \
-                source install.sh && \
-                pip install opencv-python-headless protobuf==5.27.2
-            
-            # Limpiar caché para reducir tamaño de imagen
-            RUN pip cache purge
-            
-            ENTRYPOINT [ "sh", "-c", "bash" ]
-          ' > Dockerfile
+          cat <<EOF > Dockerfile
+          FROM python:3.12.10-alpine3.21
+
+          WORKDIR /app
+
+          # Instalar dependencias del sistema
+          RUN apk add --no-cache \
+              git \
+              build-base \
+              musl-dev \
+              python3-dev \
+              libffi-dev \
+              openssl-dev \
+              wget \
+              bash \
+              libstdc++ \
+              make \
+              gcc \
+              g++ \
+              linux-headers
+
+          # Clonar EXO
+          RUN git clone https://github.com/exo-explore/exo.git /app
+
+          # Copiar y dar permisos a install.sh
+          RUN chmod +x install.sh && bash install.sh
+
+          # Instalar dependencias Python
+          RUN pip install --upgrade pip setuptools wheel && \
+              pip install -e . && \
+              pip install opencv-python-headless protobuf==5.27.2
+
+          # Limpiar pip cache
+          RUN pip cache purge
+
+          CMD ["bash"]
+          EOF
 
       - name: Construir imagen Docker
         run: |
           docker build -t ${{ github.event.inputs.image_tag }} .
 
-      - name: Eliminar imagen base de PyTorch para liberar espacio
+      - name: Mostrar tamaño de imagen construida
         run: |
-          docker rmi python:3.11-alpine3.21 || true
-
-      - name: Mostrar tamaño de la imagen Docker
-        run: |
-          IMAGE_ID=$(docker images --format="{{.Repository}}:{{.Tag}} {{.ID}}" | grep "${{ github.event.inputs.image_tag }}" | awk '{print $2}')
-          IMAGE_SIZE=$(docker image inspect $IMAGE_ID --format='{{.Size}}')
-          IMAGE_SIZE_MB=$(echo "scale=2; $IMAGE_SIZE / 1024 / 1024" | bc)
-          echo "Tamaño de la imagen: ${IMAGE_SIZE_MB} MB"
+          docker images
 
       - name: Instalar zstd para compresión agresiva
         run: |
@@ -78,3 +79,4 @@ jobs:
         with:
           name: exo-docker-image
           path: exo_image.tar.zst
+
