@@ -49,7 +49,7 @@ jobs:
           # Instalar dependencias Python
           RUN pip install --upgrade pip setuptools wheel && \
               pip install -e . && \
-              pip install opencv-python-headless protobuf==5.27.2
+              pip install opencv-python-headless
 
           # Limpiar pip cache
           RUN pip cache purge
