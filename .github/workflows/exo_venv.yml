@@ -23,7 +23,9 @@ jobs:
           python -m pip install --upgrade pip
           git clone https://github.com/exo-explore/exo.git
           cd exo
-          source install.sh
+          python3.12 -m venv .venv
+          source .venv/bin/activate
+          pip install -e .
 
       - name: Create ZIP archive
         run: |
