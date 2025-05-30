@@ -48,7 +48,7 @@ jobs:
 
           # Instalar dependencias Python
           RUN pip install --upgrade pip setuptools wheel && \
-              pip install -e . && \
+              source install.sh && \
               pip install opencv-python-headless protobuf==5.28.1 tensorflow torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
           RUN pip cache purge              
 
