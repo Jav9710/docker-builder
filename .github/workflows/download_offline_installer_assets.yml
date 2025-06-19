@@ -6,80 +6,83 @@ on:
 jobs:
   prepare-assets:
     runs-on: ubuntu-22.04
+    container:
+      image: docker:24.0.7-dind
+      options: --privileged  # Permite docker dentro del contenedor
 
     steps:
-    - name: Set up environment
+    - name: Instalar herramientas base
       run: |
-        sudo apt-get update
-        sudo apt-get install -y apt-utils gnupg curl dpkg-dev wget software-properties-common containerd jq
+        apk add --no-cache curl wget tar gzip bash util-linux coreutils git jq dpkg dpkg-dev apt
 
-    - name: Add Kubernetes apt repo and key
+    - name: Inicializar Docker daemon
       run: |
-        sudo mkdir -p /etc/apt/keyrings
-        curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.33/deb/Release.key | sudo gpg --dearmor -o /etc/apt/keyrings/kubernetes-archive-keyring.gpg
-        echo "deb [signed-by=/etc/apt/keyrings/kubernetes-archive-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.33/deb/ /" | sudo tee /etc/apt/sources.list.d/kubernetes.list
-        sudo apt-get update
+        dockerd-entrypoint.sh &  # Start Docker daemon
+        sleep 10
 
-    - name: Create directory structure
+    - name: Preparar carpetas
       run: |
-        mkdir -p offline-assets/debs/k8s offline-assets/debs/os
-        mkdir -p offline-assets/cni/calico offline-assets/cni/flannel offline-assets/cni/cilium
+        mkdir -p offline-assets/debs/k8s
+        mkdir -p offline-assets/debs/os
+        mkdir -p offline-assets/cni/calico
+        mkdir -p offline-assets/cni/flannel
+        mkdir -p offline-assets/cni/cilium
         mkdir -p docker-images
 
-    - name: Download Kubernetes .deb packages
+    - name: Configurar repositorio de Kubernetes
+      run: |
+        mkdir -p /etc/apt/keyrings
+        curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.33/deb/Release.key | gpg --dearmor -o /etc/apt/keyrings/kubernetes-archive-keyring.gpg
+        echo "deb [signed-by=/etc/apt/keyrings/kubernetes-archive-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.33/deb/ /" > /etc/apt/sources.list.d/kubernetes.list
+        apt-get update
+
+    - name: Descargar paquetes .deb de Kubernetes
       run: |
         cd offline-assets/debs/k8s
-        for pkg in kubelet kubectl kubeadm containerd; do
+        for pkg in kubelet kubeadm kubectl containerd; do
           apt-get download $pkg || echo "❗ No se encontró $pkg"
         done
 
-    - name: Download OS and utility .deb packages
+    - name: Descargar paquetes .deb de utilidades del sistema
       run: |
         cd offline-assets/debs/os
         for pkg in wget curl net-tools iproute2 bind9-utils openssh-client openssh-server openssl \
                     ca-certificates gnupg lsb-release software-properties-common tar gzip unzip \
-                    vim nano sudo apt-transport-https dpkg dpkg-dev apt-utils ansible python3 \
-                    python3-pip python3-apt; do
+                    vim nano sudo apt-transport-https apt-utils ansible python3 python3-pip python3-apt; do
           apt-get download $pkg || echo "❗ No se encontró $pkg"
         done
-        
-    - name: Start Docker daemon
-      run: |
-        sudo systemctl start docker
 
     # -------------------------------
     # CALICO
-    - name: Descargar YAML de Calico
+    - name: Descargar manifiestos de Calico
       run: |
         curl -o offline-assets/cni/calico/tigera-operator.yaml https://raw.githubusercontent.com/projectcalico/calico/v3.27.0/manifests/tigera-operator.yaml
         curl -o offline-assets/cni/calico/custom-resources.yaml https://raw.githubusercontent.com/projectcalico/calico/v3.27.0/manifests/custom-resources.yaml
 
-    - name: Descargar imágenes Docker de Calico
+    - name: Descargar imágenes de Calico
       run: |
         cd docker-images
-        images=(
-          docker.io/calico/cni:v3.27.0
-          docker.io/calico/node:v3.27.0
-          docker.io/calico/kube-controllers:v3.27.0
-          docker.io/calico/pod2daemon-flexvol:v3.27.0
-          docker.io/calico/typha:v3.27.0
-          docker.io/calico/apiserver:v3.27.0
-          docker.io/calico/operator:v1.30.0
-        )
-        for img in "${images[@]}"; do
-          docker pull $img
-          fname=$(echo $img | tr '/:' '_').tar
-          docker save -o $fname $img
+        for img in \
+          docker.io/calico/cni:v3.27.0 \
+          docker.io/calico/node:v3.27.0 \
+          docker.io/calico/kube-controllers:v3.27.0 \
+          docker.io/calico/pod2daemon-flexvol:v3.27.0 \
+          docker.io/calico/typha:v3.27.0 \
+          docker.io/calico/apiserver:v3.27.0 \
+          docker.io/calico/operator:v1.30.0; do
+            docker pull $img
+            fname=$(echo $img | tr '/:' '_').tar
+            docker save -o $fname $img
         done
         mv *.tar ../offline-assets/cni/calico/
 
     # -------------------------------
     # FLANNEL
-    - name: Descargar YAML de Flannel
+    - name: Descargar manifiesto de Flannel
       run: |
         curl -o offline-assets/cni/flannel/kube-flannel.yml https://raw.githubusercontent.com/flannel-io/flannel/v0.25.1/manifests/kube-flannel.yml
 
-    - name: Descargar imágenes Docker de Flannel
+    - name: Descargar imágenes de Flannel
       run: |
         cd docker-images
         docker pull flannel/flannel:v0.25.1
@@ -88,33 +91,31 @@ jobs:
 
     # -------------------------------
     # CILIUM
-    - name: Instalar CLI de Cilium y descargar YAML
+    - name: Instalar CLI de Cilium y generar YAML
       run: |
         curl -L --fail --remote-name-all https://github.com/cilium/cilium-cli/releases/latest/download/cilium-linux-amd64.tar.gz
         tar -xvzf cilium-linux-amd64.tar.gz
-        sudo mv cilium /usr/local/bin/
+        mv cilium /usr/local/bin/
         cilium install --dry-run > offline-assets/cni/cilium/cilium-install.yaml
 
-    - name: Descargar imágenes Docker de Cilium
+    - name: Descargar imágenes de Cilium
       run: |
         cd docker-images
-        images=(
-          quay.io/cilium/cilium:v1.14.6
-          quay.io/cilium/operator-generic:v1.14.6
-        )
-        for img in "${images[@]}"; do
-          docker pull $img
-          fname=$(echo $img | tr '/:' '_').tar
-          docker save -o $fname $img
+        for img in \
+          quay.io/cilium/cilium:v1.14.6 \
+          quay.io/cilium/operator-generic:v1.14.6; do
+            docker pull $img
+            fname=$(echo $img | tr '/:' '_').tar
+            docker save -o $fname $img
         done
         mv *.tar ../offline-assets/cni/cilium/
 
     # -------------------------------
-    - name: Crear paquete tar.gz
+    - name: Crear paquete comprimido final
       run: |
         tar -czvf offline_assets_bundle.tar.gz offline-assets
 
-    - name: Subir artefacto unificado
+    - name: Subir artefacto
       uses: actions/upload-artifact@v4
       with:
         name: offline_assets_bundle
