@@ -1,0 +1,48 @@
+name: Prepare Offline Installer Assets
+
+on:
+  workflow_dispatch:
+
+jobs:
+  prepare-assets:
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Set up environment
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y apt-utils gnupg curl dpkg-dev wget
+
+      - name: Add Kubernetes apt repo and key
+        run: |
+          sudo mkdir -p /etc/apt/keyrings
+          curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.33/deb/Release.key | sudo gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+          echo "deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.33/deb/ /" | sudo tee /etc/apt/sources.list.d/kubernetes.list
+          sudo apt-get update
+
+      - name: Create download directory
+        run: mkdir -p ./debs
+
+      - name: List all packages to include
+        id: list-packages
+        run: |
+          echo "K8S_PACKAGES='kubeadm kubelet kubectl containerd'" >> $GITHUB_ENV
+          echo "UTIL_PACKAGES='wget curl net-tools iproute2 bind9-utils openssh-client openssh-server openssl ca-certificates gnupg lsb-release software-properties-common tar gzip unzip vim nano sudo apt-transport-https dpkg dpkg-dev apt-utils ansible'" >> $GITHUB_ENV
+
+      - name: Download .deb files and dependencies
+        run: |
+          mkdir -p ./debs
+          ALL_PACKAGES="$K8S_PACKAGES $UTIL_PACKAGES"
+          echo $ALL_PACKAGES > ./all_packages.txt
+          sudo apt-get install --download-only --reinstall --print-uris $ALL_PACKAGES > uris.txt
+          grep -oP "'\Khttp[^']+" uris.txt > urls.txt
+          wget -nc -P ./debs -i urls.txt
+
+      - name: Package all .deb files into tar.gz
+        run: tar czvf offline_installer_assets.tar.gz ./debs
+
+      - name: Upload offline assets
+        uses: actions/upload-artifact@v3
+        with:
+          name: offline_installer_assets
+          path: offline_installer_assets.tar.gz
