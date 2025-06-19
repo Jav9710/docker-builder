@@ -29,21 +29,23 @@ jobs:
       run: |
         mkdir -p debs/k8s debs/os
 
-    - name: Download Kubernetes packages with dependencies
+    - name: Download Kubernetes packages
       run: |
         cd debs/k8s
-        for pkg in $K8S_PACKAGES; do
-          apt-get download $(apt-cache depends --recurse --no-recommends --no-suggests --no-conflicts --no-breaks --no-replaces --no-enhances $pkg | grep "^\w" | sort -u)
-          apt-get download $pkg
+        for pkg in kubelet kubectl kubeadm containerd; do
+          apt-get download $pkg || echo "❗ No se encontró $pkg"
         done
 
-    - name: Download OS and utility packages with dependencies
+    - name: Download OS and utility packages
       run: |
         cd debs/os
-        for pkg in $UTIL_PACKAGES; do
-          apt-get download $(apt-cache depends --recurse --no-recommends --no-suggests --no-conflicts --no-breaks --no-replaces --no-enhances $pkg | grep "^\w" | sort -u) || true
-          apt-get download $pkg || true
+        for pkg in wget curl net-tools iproute2 bind9-utils openssh-client openssh-server openssl \
+                    ca-certificates gnupg lsb-release software-properties-common tar gzip unzip \
+                    vim nano sudo apt-transport-https dpkg dpkg-dev apt-utils ansible python3 \
+                    python3-pip python3-apt; do
+          apt-get download $pkg || echo "❗ No se encontró $pkg"
         done
+
 
     - name: Create compressed archive
       run: |
