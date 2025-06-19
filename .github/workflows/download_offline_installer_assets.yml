@@ -12,12 +12,12 @@ jobs:
 
 
     steps:
-    - name: Instalar Docker y herramientas necesarias
+    - name: Instalar herramientas necesarias
       run: |
-        apt-get update
-        apt-get install -y curl wget gnupg software-properties-common lsb-release ca-certificates apt-utils dpkg-dev docker.io
-        systemctl start docker || dockerd &
-        sleep 10    
+        sudo apt-get update
+        sudo apt-get install -y curl wget tar gzip bash util-linux coreutils git jq dpkg-dev gnupg apt-utils docker.io
+        sudo systemctl start docker || sudo dockerd &
+        sleep 10 
     
     - name: Instalar herramientas base
       run: |
