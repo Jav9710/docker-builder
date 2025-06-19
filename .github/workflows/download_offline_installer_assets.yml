@@ -42,6 +42,10 @@ jobs:
                     python3-pip python3-apt; do
           apt-get download $pkg || echo "❗ No se encontró $pkg"
         done
+        
+    - name: Start Docker daemon
+      run: |
+        sudo systemctl start docker
 
     # -------------------------------
     # CALICO
