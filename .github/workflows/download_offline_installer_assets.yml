@@ -49,8 +49,8 @@ jobs:
       run: |
         tar -czvf offline_installer_assets.tar.gz -C debs .
 
-    - name: Upload artifact
-      uses: actions/upload-artifact@v3
+    - name: Upload artifact (v4)
+      uses: actions/upload-artifact@v4
       with:
         name: offline_installer_assets
         path: offline_installer_assets.tar.gz
