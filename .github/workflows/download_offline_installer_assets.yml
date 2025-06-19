@@ -18,10 +18,6 @@ jobs:
         apt-get install -y curl wget tar gzip bash util-linux coreutils git jq dpkg-dev gnupg apt-utils docker.io
         systemctl start docker || sudo dockerd &
         sleep 10 
-    
-    - name: Instalar herramientas base
-      run: |
-        apk add --no-cache curl wget tar gzip bash util-linux coreutils git jq dpkg dpkg-dev apt
 
     - name: Inicializar Docker daemon
       run: |
