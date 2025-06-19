@@ -73,7 +73,7 @@ jobs:
           docker.io/calico/pod2daemon-flexvol:v3.27.0 \
           docker.io/calico/typha:v3.27.0 \
           docker.io/calico/apiserver:v3.27.0 \
-          docker.io/calico/operator:v1.30.0; do
+          quay.io/tigera/operator:v1.30.0; do
             docker pull $img
             fname=$(echo $img | tr '/:' '_').tar
             docker save -o $fname $img
