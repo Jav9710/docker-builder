@@ -95,12 +95,11 @@ jobs:
 
     # -------------------------------
     # CILIUM
-    - name: Instalar CLI de Cilium y generar YAML
+    - name: Descargar manifiestos de Cilium
       run: |
-        curl -L --fail --remote-name-all https://github.com/cilium/cilium-cli/releases/latest/download/cilium-linux-amd64.tar.gz
-        tar -xvzf cilium-linux-amd64.tar.gz
-        mv cilium /usr/local/bin/
-        cilium install --dry-run > offline-assets/cni/cilium/cilium-install.yaml
+        curl -L https://raw.githubusercontent.com/cilium/cilium/v1.14.6/install/kubernetes/cilium.yaml \
+          -o offline-assets/cni/cilium/cilium.yaml
+
 
     - name: Descargar imágenes de Cilium
       run: |
