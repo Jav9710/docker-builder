@@ -7,10 +7,18 @@ jobs:
   prepare-assets:
     runs-on: ubuntu-22.04
     container:
-      image: docker:24.0.7-dind
-      options: --privileged  # Permite docker dentro del contenedor
+      image: ubuntu:22.04
+      options: --privileged
+
 
     steps:
+    - name: Instalar Docker y herramientas necesarias
+      run: |
+        apt-get update
+        apt-get install -y curl wget gnupg software-properties-common lsb-release ca-certificates apt-utils dpkg-dev docker.io
+        systemctl start docker || dockerd &
+        sleep 10    
+    
     - name: Instalar herramientas base
       run: |
         apk add --no-cache curl wget tar gzip bash util-linux coreutils git jq dpkg dpkg-dev apt
