@@ -14,9 +14,9 @@ jobs:
     steps:
     - name: Instalar herramientas necesarias
       run: |
-        sudo apt-get update
-        sudo apt-get install -y curl wget tar gzip bash util-linux coreutils git jq dpkg-dev gnupg apt-utils docker.io
-        sudo systemctl start docker || sudo dockerd &
+        apt-get update
+        apt-get install -y curl wget tar gzip bash util-linux coreutils git jq dpkg-dev gnupg apt-utils docker.io
+        systemctl start docker || sudo dockerd &
         sleep 10 
     
     - name: Instalar herramientas base
