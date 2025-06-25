@@ -15,10 +15,18 @@ jobs:
       run: |
         dnf update -y
         dnf install -y curl wget tar gzip bash coreutils git jq gnupg2 shadow-utils \
-                       docker util-linux rpm-build rpm yum yum-utils
+                       yum-utils device-mapper-persistent-data lvm2 util-linux rpm-build
 
+        # Agregar repositorio oficial de Docker CE
+        dnf config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
+
+        # Instalar Docker
+        dnf install -y docker-ce docker-ce-cli containerd.io
+
+        # Iniciar el servicio de Docker
         systemctl start docker || dockerd &
         sleep 10
+
 
     - name: Inicializar Docker daemon
       run: |
