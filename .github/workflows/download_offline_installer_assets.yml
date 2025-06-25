@@ -44,6 +44,11 @@ jobs:
 
     - name: Agregar repositorio Kubernetes (CentOS)
       run: |
+        # Descargar e importar clave GPG
+        curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.33/rpm/repodata/repomd.xml.key -o /etc/pki/rpm-gpg/RPM-GPG-KEY-kubernetes
+        rpm --import /etc/pki/rpm-gpg/RPM-GPG-KEY-kubernetes
+
+        # Agregar repositorio Kubernetes
         cat <<EOF > /etc/yum.repos.d/kubernetes.repo
         [kubernetes]
         name=Kubernetes
@@ -51,10 +56,13 @@ jobs:
         enabled=1
         gpgcheck=1
         repo_gpgcheck=1
-        gpgkey=https://pkgs.k8s.io/core:/stable:/v1.33/rpm/repodata/repomd.xml.key
+        gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-kubernetes
         EOF
+
+        # Actualizar caché
         dnf clean all
         dnf makecache
+
 
     - name: Descargar paquetes RPM de Kubernetes
       run: |
