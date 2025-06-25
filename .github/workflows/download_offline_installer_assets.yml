@@ -7,7 +7,7 @@ jobs:
   prepare-assets:
     runs-on: ubuntu-22.04
     container:
-      image: centos:stream10
+      image: quay.io/centos/centos:stream10
       options: --privileged
 
     steps:
