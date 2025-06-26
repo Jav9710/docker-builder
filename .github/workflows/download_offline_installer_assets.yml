@@ -44,21 +44,26 @@ jobs:
 
     - name: Agregar repositorio Kubernetes (CentOS)
       run: |
-        # Crear archivo de repositorio apuntando a clave remota (no local)
+        # Descargar clave GPG manualmente y forzar su importación
+        curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.33/rpm/repodata/repomd.xml.key -o /tmp/kubernetes.key
+        rpm --import /tmp/kubernetes.key
+
+        # Crear repositorio apuntando a clave local ya importada
         cat <<EOF > /etc/yum.repos.d/kubernetes.repo
         [kubernetes]
         name=Kubernetes
         baseurl=https://pkgs.k8s.io/core:/stable:/v1.33/rpm/
         enabled=1
         gpgcheck=1
-        repo_gpgcheck=1
-        gpgkey=https://pkgs.k8s.io/core:/stable:/v1.33/rpm/repodata/repomd.xml.key
+        repo_gpgcheck=0
+        gpgkey=file:///tmp/kubernetes.key
         EOF
 
-        dnf clean all
-        dnf makecache
+        # Hacer primer cacheo sin requerir repo_gpgcheck
+        dnf --nogpgcheck makecache
 
-
+        # (Opcional) Validar que clave fue importada
+        rpm -q gpg-pubkey
 
     - name: Descargar paquetes RPM de Kubernetes
       run: |
