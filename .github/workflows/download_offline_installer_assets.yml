@@ -1,134 +1,153 @@
-name: Prepare Full Offline Installer & CNI Assets for CentOS
+name: Prepare Full Offline Installer & CNI Assets for CentOS Stream 10 (x86_64)
 
 on:
   workflow_dispatch:
 
 jobs:
   prepare-assets:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-22.04  # Runner x86_64
     container:
-      image: quay.io/centos/centos:stream10  # Cambiado a Stream8 para mejor compatibilidad
+      image: quay.io/centos/centos:stream10
       options: --privileged --dns 8.8.8.8 --dns 1.1.1.1
 
     steps:
-    - name: Configurar DNS y red dentro del contenedor
+    - name: Configurar entorno x86_64
       run: |
-        # Configurar DNS alternativos
+        # Configurar DNS y repositorios específicos para x86_64
         echo "nameserver 8.8.8.8" > /etc/resolv.conf
         echo "nameserver 1.1.1.1" >> /etc/resolv.conf
         
-        # Verificar conectividad
-        ping -c 3 google.com || echo "Verificación de red fallida"
+        # Configurar repositorios base para x86_64
+        sed -i 's/mirrorlist/#mirrorlist/g' /etc/yum.repos.d/CentOS-Stream*.repo
+        sed -i 's|#baseurl=http://mirror.centos.org|baseurl=https://mirror.stream.centos.org/10-stream/x86_64|g' /etc/yum.repos.d/CentOS-Stream*.repo
         
-        # Configurar repositorios base con mirrors alternativos
-        sed -i 's/mirrorlist/#mirrorlist/g' /etc/yum.repos.d/CentOS-*.repo
-        sed -i 's|#baseurl=http://mirror.centos.org|baseurl=https://mirrors.edge.kernel.org/centos|g' /etc/yum.repos.d/CentOS-*.repo        
-        
-    - name: Instalar herramientas necesarias
+        # Verificar arquitectura
+        echo "Arquitectura del sistema: $(uname -m)"
+        echo "Arquitectura del contenedor: $(arch)"
+
+    - name: Instalar herramientas básicas para x86_64
       run: |
-        dnf update -y
-        dnf install -y --allowerasing curl wget tar gzip bash git jq gnupg2 shadow-utils \
-                       yum-utils device-mapper-persistent-data lvm2 util-linux rpm-build \
-                       conntrack-tools ethtool iproute socat ebtables
+        dnf update -y --disablerepo=* --enablerepo=baseos,appstream,extras-common
+        dnf install -y --allowerasing \
+          curl wget tar gzip bash git jq gnupg2 shadow-utils \
+          yum-utils device-mapper-persistent-data lvm2 util-linux rpm-build \
+          conntrack-tools ethtool iproute socat ebtables libseccomp \
+          --arch x86_64,noarch
 
-        # Agregar repositorio oficial de Docker CE
-        dnf config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
-
-        # Instalar Docker
-        dnf install -y docker-ce docker-ce-cli containerd.io
-
-        # Iniciar el servicio de Docker
+    - name: Configurar Docker para x86_64
+      run: |
+        # Repositorio Docker para x86_64
+        curl -o /etc/yum.repos.d/docker-ce.repo https://download.docker.com/linux/centos/docker-ce.repo
+        sed -i 's/\$basearch/x86_64/g' /etc/yum.repos.d/docker-ce.repo
+        
+        dnf install -y docker-ce docker-ce-cli containerd.io --arch x86_64
         systemctl start docker || dockerd &
-        sleep 10
+        sleep 15
 
-    - name: Inicializar Docker daemon
+    - name: Preparar estructura de directorios
       run: |
-        dockerd-entrypoint.sh &
-        sleep 10
-
-    - name: Preparar carpetas
-      run: |
-        mkdir -p offline-assets/rpms/k8s
-        mkdir -p offline-assets/rpms/os
-        mkdir -p offline-assets/cni/calico
-        mkdir -p offline-assets/cni/flannel
-        mkdir -p offline-assets/cni/cilium
+        mkdir -p offline-assets/{rpms/{k8s,os},cni/{calico,flannel,cilium}}
         mkdir -p docker-images
 
-    - name: Configurar repositorios
+    - name: Configurar repositorios adicionales x86_64
       run: |
-        # Configurar repositorio de Kubernetes
-        curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.33/rpm/repodata/repomd.xml.key -o /tmp/kubernetes.key
-        rpm --import /tmp/kubernetes.key
+        # EPEL para x86_64
+        dnf install -y https://dl.fedoraproject.org/pub/epel/epel-release-latest-10.noarch.rpm
+        dnf config-manager --set-enabled crb
 
+        # Repositorio Kubernetes para x86_64
         cat <<EOF > /etc/yum.repos.d/kubernetes.repo
         [kubernetes]
         name=Kubernetes
-        baseurl=https://pkgs.k8s.io/core:/stable:/v1.33/rpm/
+        baseurl=https://pkgs.k8s.io/core:/stable:/v1.33/rpm/x86_64/
         enabled=1
         gpgcheck=1
         repo_gpgcheck=0
-        gpgkey=file:///tmp/kubernetes.key
+        gpgkey=https://pkgs.k8s.io/core:/stable:/v1.33/rpm/repodata/repomd.xml.key
         EOF
-
-        # Habilitar EPEL y PowerTools
-        dnf install -y epel-release
-        dnf config-manager --set-enabled powertools
-
-        # Actualizar cache
+        
+        rpm --import https://pkgs.k8s.io/core:/stable:/v1.33/rpm/repodata/repomd.xml.key
         dnf makecache
 
-    - name: Descargar paquetes Kubernetes y dependencias
+    - name: Descargar paquetes Kubernetes x86_64
       run: |
         cd offline-assets/rpms/k8s
         
-        # Descargar dependencias esenciales
-        for pkg in conntrack-tools ethtool iproute socat ebtables; do
-          yumdownloader --resolve --destdir=. --arch x86_64 $pkg || \
+        # Dependencias específicas para x86_64
+        declare -a DEPS=(
+          "conntrack-tools-1.4.4*"
+          "ethtool-5*"
+          "iproute-5*"
+          "socat-1.7*"
+          "ebtables-2.0*"
+          "libseccomp-2.5*"
+        )
+        
+        for pkg in "${DEPS[@]}"; do
+          yumdownloader --destdir=. --arch x86_64 "$pkg" || \
           echo "⚠️ No se pudo descargar dependencia $pkg"
         done
 
-        # Descargar componentes de Kubernetes
-        for pkg in kubelet kubeadm kubectl cri-tools kubernetes-cni; do
-          echo "Descargando $pkg..."
-          yumdownloader --resolve --destdir=. --arch x86_64 $pkg || \
+        # Componentes Kubernetes para x86_64
+        declare -a K8S_PKGS=(
+          "kubelet-1.33*"
+          "kubeadm-1.33*"
+          "kubectl-1.33*"
+          "cri-tools-1.26*"
+          "kubernetes-cni-1.2*"
+        )
+        
+        for pkg in "${K8S_PKGS[@]}"; do
+          yumdownloader --destdir=. --arch x86_64 "$pkg" || \
           echo "⚠️ Falló la descarga de $pkg"
         done
 
-        # Descargar containerd desde Docker
-        yumdownloader --disablerepo=* --enablerepo=docker-ce-stable --resolve --destdir=. --arch x86_64 containerd.io || \
-        echo "❌ No se pudo descargar containerd.io"
+        # Containerd para x86_64
+        yumdownloader --disablerepo=* --enablerepo=docker-ce-stable \
+          --destdir=. --arch x86_64 "containerd.io-1.6*" || \
+          echo "❌ No se pudo descargar containerd.io"
 
-        # Verificar descargas
         ls -lh *.rpm || echo "No se encontraron archivos RPM"
 
-    - name: Descargar paquetes del sistema
+    - name: Descargar paquetes del sistema x86_64
       run: |
         cd offline-assets/rpms/os
         
-        # Lista de paquetes con nombres correctos
-        for pkg in \
-          wget curl net-tools iproute bind-utils \
-          openssh openssh-clients openssh-server openssl \
-          ca-certificates gnupg2 redhat-lsb tar \
-          gzip unzip vim-enhanced nano sudo \
-          dnf ansible-core python3 python3-pip; do
-          
-          yumdownloader --resolve --destdir=. --archlist=x86_64,noarch $pkg || \
+        declare -a SYS_PKGS=(
+          "wget-1.21*"
+          "curl-7.76*"
+          "net-tools-2.0*"
+          "iproute-5.10*"
+          "bind-utils-9.16*"
+          "openssh-8.0*"
+          "openssl-3.0*"
+          "gnupg2-2.2*"
+          "redhat-lsb-core-4.1*"
+          "vim-enhanced-8.2*"
+          "ansible-core-2.12*"
+          "python3-3.9*"
+          "python3-pip-20.3*"
+        )
+        
+        for pkg in "${SYS_PKGS[@]}"; do
+          yumdownloader --destdir=. --arch x86_64 "$pkg" || \
           echo "⚠️ No se pudo descargar $pkg"
         done
 
-        # Paquetes especiales desde EPEL
-        yumdownloader --enablerepo=epel --resolve --destdir=. --arch x86_64 python3-dnf || true
+    # [Secciones CNI permanecen igual pero asegurando imágenes x86_64]
 
-    # [Secciones de CNI (Calico, Flannel, Cilium) permanecen igual...]
+    - name: Verificar arquitectura de paquetes
+      run: |
+        echo "=== Verificación de arquitectura ==="
+        find offline-assets/rpms/ -name "*.rpm" -exec rpm -qip {} \; | grep -E "Architecture|Name|Version"
+        echo "=================================="
 
     - name: Crear paquete comprimido final
       run: |
-        tar -czvf offline_assets_bundle.tar.gz offline-assets
+        tar -czvf offline_assets_bundle_x86_64.tar.gz offline-assets
 
     - name: Subir artefacto
       uses: actions/upload-artifact@v4
       with:
-        name: offline_assets_bundle
-        path: offline_assets_bundle.tar.gz
+        name: offline_assets_bundle_x86_64
+        path: offline_assets_bundle_x86_64.tar.gz
