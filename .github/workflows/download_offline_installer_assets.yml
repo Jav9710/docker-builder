@@ -7,7 +7,7 @@ jobs:
   prepare-assets:
     runs-on: ubuntu-22.04
     container:
-      image: quay.io/centos/centos:stream8  # Cambiado a Stream8 para mejor compatibilidad
+      image: quay.io/centos/centos:stream10  # Cambiado a Stream8 para mejor compatibilidad
       options: --privileged --dns 8.8.8.8 --dns 1.1.1.1
 
     steps:
