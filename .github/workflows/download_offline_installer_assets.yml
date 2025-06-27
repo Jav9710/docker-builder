@@ -13,17 +13,27 @@ jobs:
     steps:
     - name: Configurar entorno x86_64
       run: |
-        # Configurar DNS y repositorios específicos para x86_64
+        # Configurar DNS
         echo "nameserver 8.8.8.8" > /etc/resolv.conf
         echo "nameserver 1.1.1.1" >> /etc/resolv.conf
         
-        # Configurar repositorios base para x86_64
-        sed -i 's/mirrorlist/#mirrorlist/g' /etc/yum.repos.d/CentOS-Stream*.repo
-        sed -i 's|#baseurl=http://mirror.centos.org|baseurl=https://mirror.stream.centos.org/10-stream/x86_64|g' /etc/yum.repos.d/CentOS-Stream*.repo
+        # Verificar archivos de repositorio existentes
+        ls -la /etc/yum.repos.d/
         
-        # Verificar arquitectura
-        echo "Arquitectura del sistema: $(uname -m)"
-        echo "Arquitectura del contenedor: $(arch)"
+        # Configurar repositorios base para x86_64 (nombres actualizados para Stream 10)
+        for repo_file in /etc/yum.repos.d/CentOS-Stream-*.repo; do
+          if [ -f "$repo_file" ]; then
+            sed -i 's/mirrorlist/#mirrorlist/g' "$repo_file"
+            sed -i 's|#baseurl=http://mirror.centos.org|baseurl=https://mirror.stream.centos.org/10-stream/BaseOS/x86_64/os|g' "$repo_file"
+            sed -i 's|#baseurl=http://mirror.centos.org|baseurl=https://mirror.stream.centos.org/10-stream/AppStream/x86_64/os|g' "$repo_file"
+            sed -i 's|#baseurl=http://mirror.centos.org|baseurl=https://mirror.stream.centos.org/10-stream/extras/x86_64/os|g' "$repo_file"
+          else
+            echo "⚠️ Archivo de repositorio no encontrado: $repo_file"
+          fi
+        done
+        
+        # Verificar conectividad
+        ping -c 3 google.com || echo "Verificación de red fallida"
 
     - name: Instalar herramientas básicas para x86_64
       run: |
