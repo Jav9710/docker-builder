@@ -68,16 +68,16 @@ jobs:
     - name: Descargar paquetes RPM de Kubernetes
       run: |
         cd offline-assets/rpms/k8s
-        for pkg in kubelet kubeadm kubectl containerd; do
+        for pkg in kubelet.x86_64 kubeadm.x86_64 kubectl.x86_64 containerd.x86_64; do
           yumdownloader --resolve --destdir=. $pkg || echo "❗ No se encontró $pkg"
         done
 
     - name: Descargar paquetes RPM del sistema
       run: |
         cd offline-assets/rpms/os
-        for pkg in wget curl net-tools iproute bind-utils openssh openssh-clients openssh-server openssl \
-                    ca-certificates gnupg2 redhat-lsb-core tar gzip unzip \
-                    vim nano sudo dnf ansible python3 python3-pip python3-dnf; do
+        for pkg in wget.x86_64 curl.x86_64 net-tools.x86_64 iproute.x86_64 bind-utils.x86_64 openssh.x86_64 openssh-clients.x86_64 openssh-server.x86_64 openssl.x86_64 \
+                    ca-certificates.x86_64 gnupg2.x86_64 redhat-lsb-core.x86_64 tar.x86_64 gzip.x86_64 unzip.x86_64 \
+                    vim.x86_64 nano.x86_64 sudo.x86_64 dnf.x86_64 ansible.x86_64 python3.x86_64 python3-pip.x86_64 python3-dnf.x86_64; do
           yumdownloader --resolve --destdir=. $pkg || echo "❗ No se encontró $pkg"
         done
 
