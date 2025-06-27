@@ -5,52 +5,60 @@ on:
 
 jobs:
   prepare-assets:
-    runs-on: ubuntu-22.04  # Runner x86_64
+    runs-on: ubuntu-22.04
     container:
       image: quay.io/centos/centos:stream10
       options: --privileged --dns 8.8.8.8 --dns 1.1.1.1
 
     steps:
-    - name: Configurar entorno x86_64
+    - name: Configurar entorno básico
       run: |
         # Configurar DNS
         echo "nameserver 8.8.8.8" > /etc/resolv.conf
         echo "nameserver 1.1.1.1" >> /etc/resolv.conf
         
-        # Verificar archivos de repositorio existentes
-        ls -la /etc/yum.repos.d/
-        
-        # Configurar repositorios base para x86_64 (nombres actualizados para Stream 10)
-        for repo_file in /etc/yum.repos.d/CentOS-Stream-*.repo; do
-          if [ -f "$repo_file" ]; then
-            sed -i 's/mirrorlist/#mirrorlist/g' "$repo_file"
-            sed -i 's|#baseurl=http://mirror.centos.org|baseurl=https://mirror.stream.centos.org/10-stream/BaseOS/x86_64/os|g' "$repo_file"
-            sed -i 's|#baseurl=http://mirror.centos.org|baseurl=https://mirror.stream.centos.org/10-stream/AppStream/x86_64/os|g' "$repo_file"
-            sed -i 's|#baseurl=http://mirror.centos.org|baseurl=https://mirror.stream.centos.org/10-stream/extras/x86_64/os|g' "$repo_file"
-          else
-            echo "⚠️ Archivo de repositorio no encontrado: $repo_file"
-          fi
-        done
-        
-        # Verificar conectividad
-        ping -c 3 google.com || echo "Verificación de red fallida"
+        # Crear repositorios base manualmente
+        cat <<EOF > /etc/yum.repos.d/CentOS-Stream.repo
+        [baseos]
+        name=CentOS Stream 10 - BaseOS
+        baseurl=https://mirror.stream.centos.org/10-stream/BaseOS/x86_64/os/
+        gpgcheck=1
+        gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-centosofficial
 
-    - name: Instalar herramientas básicas para x86_64
+        [appstream]
+        name=CentOS Stream 10 - AppStream
+        baseurl=https://mirror.stream.centos.org/10-stream/AppStream/x86_64/os/
+        gpgcheck=1
+        gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-centosofficial
+
+        [extras]
+        name=CentOS Stream 10 - Extras
+        baseurl=https://mirror.stream.centos.org/10-stream/extras/x86_64/os/
+        gpgcheck=1
+        gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-centosofficial
+        EOF
+
+        # Importar clave GPG
+        curl -s https://www.centos.org/keys/RPM-GPG-KEY-CentOS-Official > /etc/pki/rpm-gpg/RPM-GPG-KEY-centosofficial
+
+        # Verificar conectividad
+        curl -I https://mirror.stream.centos.org || echo "Verificación de red fallida"
+
+    - name: Instalar herramientas básicas
       run: |
-        dnf update -y --disablerepo=* --enablerepo=baseos,appstream,extras-common
-        dnf install -y --allowerasing \
+        dnf update -y
+        dnf install -y \
           curl wget tar gzip bash git jq gnupg2 shadow-utils \
           yum-utils device-mapper-persistent-data lvm2 util-linux rpm-build \
-          conntrack-tools ethtool iproute socat ebtables libseccomp \
-          --arch x86_64,noarch
+          conntrack-tools ethtool iproute socat ebtables libseccomp
 
-    - name: Configurar Docker para x86_64
+    - name: Configurar Docker
       run: |
         # Repositorio Docker para x86_64
         curl -o /etc/yum.repos.d/docker-ce.repo https://download.docker.com/linux/centos/docker-ce.repo
         sed -i 's/\$basearch/x86_64/g' /etc/yum.repos.d/docker-ce.repo
         
-        dnf install -y docker-ce docker-ce-cli containerd.io --arch x86_64
+        dnf install -y docker-ce docker-ce-cli containerd.io
         systemctl start docker || dockerd &
         sleep 15
 
@@ -59,17 +67,17 @@ jobs:
         mkdir -p offline-assets/{rpms/{k8s,os},cni/{calico,flannel,cilium}}
         mkdir -p docker-images
 
-    - name: Configurar repositorios adicionales x86_64
+    - name: Configurar repositorios adicionales
       run: |
-        # EPEL para x86_64
+        # EPEL para Stream 10
         dnf install -y https://dl.fedoraproject.org/pub/epel/epel-release-latest-10.noarch.rpm
         dnf config-manager --set-enabled crb
 
-        # Repositorio Kubernetes para x86_64
+        # Repositorio Kubernetes
         cat <<EOF > /etc/yum.repos.d/kubernetes.repo
         [kubernetes]
         name=Kubernetes
-        baseurl=https://pkgs.k8s.io/core:/stable:/v1.33/rpm/x86_64/
+        baseurl=https://pkgs.k8s.io/core:/stable:/v1.33/rpm/
         enabled=1
         gpgcheck=1
         repo_gpgcheck=0
@@ -79,77 +87,70 @@ jobs:
         rpm --import https://pkgs.k8s.io/core:/stable:/v1.33/rpm/repodata/repomd.xml.key
         dnf makecache
 
-    - name: Descargar paquetes Kubernetes x86_64
+    - name: Descargar paquetes Kubernetes
       run: |
         cd offline-assets/rpms/k8s
         
-        # Dependencias específicas para x86_64
-        declare -a DEPS=(
-          "conntrack-tools-1.4.4*"
-          "ethtool-5*"
-          "iproute-5*"
-          "socat-1.7*"
-          "ebtables-2.0*"
-          "libseccomp-2.5*"
-        )
-        
-        for pkg in "${DEPS[@]}"; do
-          yumdownloader --destdir=. --arch x86_64 "$pkg" || \
-          echo "⚠️ No se pudo descargar dependencia $pkg"
-        done
-
-        # Componentes Kubernetes para x86_64
-        declare -a K8S_PKGS=(
-          "kubelet-1.33*"
-          "kubeadm-1.33*"
-          "kubectl-1.33*"
-          "cri-tools-1.26*"
-          "kubernetes-cni-1.2*"
-        )
-        
-        for pkg in "${K8S_PKGS[@]}"; do
-          yumdownloader --destdir=. --arch x86_64 "$pkg" || \
+        # Descargar componentes principales
+        for pkg in kubelet kubeadm kubectl cri-tools kubernetes-cni; do
+          echo "Descargando $pkg..."
+          # Forma correcta de especificar arquitectura
+          yumdownloader --destdir=. $pkg.x86_64 || \
+          yumdownloader --destdir=. $pkg || \
           echo "⚠️ Falló la descarga de $pkg"
         done
 
-        # Containerd para x86_64
+        # Descargar containerd desde Docker
         yumdownloader --disablerepo=* --enablerepo=docker-ce-stable \
-          --destdir=. --arch x86_64 "containerd.io-1.6*" || \
+          --destdir=. containerd.io || \
           echo "❌ No se pudo descargar containerd.io"
 
         ls -lh *.rpm || echo "No se encontraron archivos RPM"
 
-    - name: Descargar paquetes del sistema x86_64
+    - name: Descargar paquetes del sistema
       run: |
         cd offline-assets/rpms/os
         
-        declare -a SYS_PKGS=(
-          "wget-1.21*"
-          "curl-7.76*"
-          "net-tools-2.0*"
-          "iproute-5.10*"
-          "bind-utils-9.16*"
-          "openssh-8.0*"
-          "openssl-3.0*"
-          "gnupg2-2.2*"
-          "redhat-lsb-core-4.1*"
-          "vim-enhanced-8.2*"
-          "ansible-core-2.12*"
-          "python3-3.9*"
-          "python3-pip-20.3*"
-        )
+        # Función para descargar paquetes con manejo de arquitectura
+        download_pkg() {
+          local pkg=$1
+          echo "Intentando descargar $pkg para x86_64..."
+          if yumdownloader --resolve --destdir=. $pkg.x86_64; then
+            return 0
+          fi
+          
+          echo "Intentando descargar $pkg como noarch..."
+          if yumdownloader --resolve --destdir=. $pkg.noarch; then
+            return 0
+          fi
+          
+          echo "Intentando descargar $pkg sin especificar arquitectura..."
+          if yumdownloader --resolve --destdir=. $pkg; then
+            return 0
+          fi
+          
+          echo "⚠️ No se pudo descargar $pkg (ni como x86_64 ni noarch)"
+          return 1
+        }
         
-        for pkg in "${SYS_PKGS[@]}"; do
-          yumdownloader --destdir=. --arch x86_64 "$pkg" || \
-          echo "⚠️ No se pudo descargar $pkg"
+        # Lista de paquetes del sistema
+        for pkg in wget curl net-tools iproute bind-utils \
+                   openssh openssh-clients openssh-server openssl \
+                   ca-certificates gnupg2 redhat-lsb-core tar \
+                   gzip unzip vim-enhanced nano sudo \
+                   dnf ansible-core python3 python3-pip; do
+          download_pkg $pkg || true
         done
+
+        # Paquetes especiales
+        yumdownloader --resolve --destdir=. --enablerepo=epel python3-dnf || true
 
     # [Secciones CNI permanecen igual pero asegurando imágenes x86_64]
 
-    - name: Verificar arquitectura de paquetes
+    - name: Verificar paquetes descargados
       run: |
         echo "=== Verificación de arquitectura ==="
-        find offline-assets/rpms/ -name "*.rpm" -exec rpm -qip {} \; | grep -E "Architecture|Name|Version"
+        find offline-assets/rpms/ -name "*.rpm" -exec rpm -qip {} \; | grep -E "Name|Version|Architecture"
         echo "=================================="
 
     - name: Crear paquete comprimido final
