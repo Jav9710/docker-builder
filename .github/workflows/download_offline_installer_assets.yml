@@ -8,9 +8,22 @@ jobs:
     runs-on: ubuntu-22.04
     container:
       image: quay.io/centos/centos:stream8  # Cambiado a Stream8 para mejor compatibilidad
-      options: --privileged
+      options: --privileged --dns 8.8.8.8 --dns 1.1.1.1
 
     steps:
+    - name: Configurar DNS y red dentro del contenedor
+      run: |
+        # Configurar DNS alternativos
+        echo "nameserver 8.8.8.8" > /etc/resolv.conf
+        echo "nameserver 1.1.1.1" >> /etc/resolv.conf
+        
+        # Verificar conectividad
+        ping -c 3 google.com || echo "Verificación de red fallida"
+        
+        # Configurar repositorios base con mirrors alternativos
+        sed -i 's/mirrorlist/#mirrorlist/g' /etc/yum.repos.d/CentOS-*.repo
+        sed -i 's|#baseurl=http://mirror.centos.org|baseurl=https://mirrors.edge.kernel.org/centos|g' /etc/yum.repos.d/CentOS-*.repo        
+        
     - name: Instalar herramientas necesarias
       run: |
         dnf update -y
