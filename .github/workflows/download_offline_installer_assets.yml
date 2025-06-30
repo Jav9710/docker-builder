@@ -11,13 +11,17 @@ jobs:
       options: --privileged --dns 8.8.8.8 --dns 1.1.1.1
 
     steps:
-    - name: Configurar entorno básico
+    - name: Configurar entorno básico y limpiar repositorios duplicados
       run: |
         # Configurar DNS
         echo "nameserver 8.8.8.8" > /etc/resolv.conf
         echo "nameserver 1.1.1.1" >> /etc/resolv.conf
-        
-        # Crear repositorios base manualmente
+
+        # Eliminar repositorios CentOS previos para evitar duplicados
+        rm -f /etc/yum.repos.d/CentOS-*.repo
+        rm -f /etc/yum.repos.d/centos*.repo
+
+        # Crear repositorios base manualmente (ajusta URLs si tienes un mirror propio)
         cat <<EOF > /etc/yum.repos.d/CentOS-Stream.repo
         [baseos]
         name=CentOS Stream 10 - BaseOS
@@ -30,19 +34,14 @@ jobs:
         baseurl=https://mirror.stream.centos.org/10-stream/AppStream/x86_64/os/
         gpgcheck=1
         gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-centosofficial
-
-        [extras]
-        name=CentOS Stream 10 - Extras
-        baseurl=https://mirror.stream.centos.org/10-stream/extras/x86_64/os/
-        gpgcheck=1
-        gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-centosofficial
         EOF
 
         # Importar clave GPG
         curl -s https://www.centos.org/keys/RPM-GPG-KEY-CentOS-Official > /etc/pki/rpm-gpg/RPM-GPG-KEY-centosofficial
 
-        # Verificar conectividad
-        curl -I https://mirror.stream.centos.org || echo "Verificación de red fallida"
+        # Verificar conectividad a los repositorios
+        curl -I https://mirror.stream.centos.org/10-stream/BaseOS/x86_64/os/repodata/repomd.xml || echo "BaseOS no disponible"
+        curl -I https://mirror.stream.centos.org/10-stream/AppStream/x86_64/os/repodata/repomd.xml || echo "AppStream no disponible"
 
     - name: Instalar herramientas básicas
       run: |
@@ -57,7 +56,7 @@ jobs:
         # Repositorio Docker para x86_64
         curl -o /etc/yum.repos.d/docker-ce.repo https://download.docker.com/linux/centos/docker-ce.repo
         sed -i 's/\$basearch/x86_64/g' /etc/yum.repos.d/docker-ce.repo
-        
+
         dnf install -y docker-ce docker-ce-cli containerd.io
         systemctl start docker || dockerd &
         sleep 15
@@ -69,9 +68,9 @@ jobs:
 
     - name: Configurar repositorios adicionales
       run: |
-        # EPEL para Stream 10
-        dnf install -y https://dl.fedoraproject.org/pub/epel/epel-release-latest-10.noarch.rpm
-        dnf config-manager --set-enabled crb
+        # EPEL para Stream 10 (ajusta si no existe o usa tu mirror)
+        dnf install -y https://dl.fedoraproject.org/pub/epel/epel-release-latest-10.noarch.rpm || echo "EPEL no disponible"
+        dnf config-manager --set-enabled crb || true
 
         # Repositorio Kubernetes
         cat <<EOF > /etc/yum.repos.d/kubernetes.repo
@@ -83,18 +82,17 @@ jobs:
         repo_gpgcheck=0
         gpgkey=https://pkgs.k8s.io/core:/stable:/v1.33/rpm/repodata/repomd.xml.key
         EOF
-        
+
         rpm --import https://pkgs.k8s.io/core:/stable:/v1.33/rpm/repodata/repomd.xml.key
         dnf makecache
 
     - name: Descargar paquetes Kubernetes
       run: |
         cd offline-assets/rpms/k8s
-        
+
         # Descargar componentes principales
         for pkg in kubelet kubeadm kubectl cri-tools kubernetes-cni; do
           echo "Descargando $pkg..."
-          # Forma correcta de especificar arquitectura
           yumdownloader --destdir=. $pkg.x86_64 || \
           yumdownloader --destdir=. $pkg || \
           echo "⚠️ Falló la descarga de $pkg"
@@ -110,30 +108,28 @@ jobs:
     - name: Descargar paquetes del sistema
       run: |
         cd offline-assets/rpms/os
-        
-        # Función para descargar paquetes con manejo de arquitectura
+
         download_pkg() {
           local pkg=$1
           echo "Intentando descargar $pkg para x86_64..."
           if yumdownloader --resolve --destdir=. $pkg.x86_64; then
             return 0
           fi
-          
+
           echo "Intentando descargar $pkg como noarch..."
           if yumdownloader --resolve --destdir=. $pkg.noarch; then
             return 0
           fi
-          
+
           echo "Intentando descargar $pkg sin especificar arquitectura..."
           if yumdownloader --resolve --destdir=. $pkg; then
             return 0
           fi
-          
+
           echo "⚠️ No se pudo descargar $pkg (ni como x86_64 ni noarch)"
           return 1
         }
-        
-        # Lista de paquetes del sistema
+
         for pkg in wget curl net-tools iproute bind-utils \
                    openssh openssh-clients openssh-server openssl \
                    ca-certificates gnupg2 redhat-lsb-core tar \
@@ -142,10 +138,7 @@ jobs:
           download_pkg $pkg || true
         done
 
-        # Paquetes especiales
         yumdownloader --resolve --destdir=. --enablerepo=epel python3-dnf || true
-
-    # [Secciones CNI permanecen igual pero asegurando imágenes x86_64]
 
     - name: Verificar paquetes descargados
       run: |
