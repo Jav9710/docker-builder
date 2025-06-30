@@ -46,7 +46,7 @@ jobs:
     - name: Instalar herramientas básicas
       run: |
         dnf update -y
-        dnf install -y \
+        dnf install --nogpgcheck -y \
           curl wget tar gzip bash git jq gnupg2 shadow-utils \
           yum-utils device-mapper-persistent-data lvm2 util-linux rpm-build \
           conntrack-tools ethtool iproute socat ebtables libseccomp
@@ -57,7 +57,7 @@ jobs:
         curl -o /etc/yum.repos.d/docker-ce.repo https://download.docker.com/linux/centos/docker-ce.repo
         sed -i 's/\$basearch/x86_64/g' /etc/yum.repos.d/docker-ce.repo
 
-        dnf install -y docker-ce docker-ce-cli containerd.io
+        dnf install --nogpgcheck -y docker-ce docker-ce-cli containerd.io
         systemctl start docker || dockerd &
         sleep 15
 
@@ -69,7 +69,7 @@ jobs:
     - name: Configurar repositorios adicionales
       run: |
         # EPEL para Stream 10 (ajusta si no existe o usa tu mirror)
-        dnf install -y https://dl.fedoraproject.org/pub/epel/epel-release-latest-10.noarch.rpm || echo "EPEL no disponible"
+        dnf install --nogpgcheck -y https://dl.fedoraproject.org/pub/epel/epel-release-latest-10.noarch.rpm || echo "EPEL no disponible"
         dnf config-manager --set-enabled crb || true
 
         # Repositorio Kubernetes
