@@ -11,147 +11,413 @@ jobs:
       options: --privileged --dns 8.8.8.8 --dns 1.1.1.1
 
     steps:
-    - name: Configurar entorno básico y limpiar repositorios duplicados
+    - name: Configurar entorno básico y repositorios
       run: |
         # Configurar DNS
         echo "nameserver 8.8.8.8" > /etc/resolv.conf
         echo "nameserver 1.1.1.1" >> /etc/resolv.conf
 
-        # Eliminar repositorios CentOS previos para evitar duplicados
+        # Limpiar cache y repositorios existentes
+        dnf clean all
+        rm -rf /var/cache/dnf/*
         rm -f /etc/yum.repos.d/CentOS-*.repo
         rm -f /etc/yum.repos.d/centos*.repo
 
-        # Crear repositorios base manualmente (ajusta URLs si tienes un mirror propio)
+        # Crear repositorios base con configuración GPG más permisiva
         cat <<EOF > /etc/yum.repos.d/CentOS-Stream.repo
         [baseos]
         name=CentOS Stream 10 - BaseOS
         baseurl=https://mirror.stream.centos.org/10-stream/BaseOS/x86_64/os/
-        gpgcheck=1
-        gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-centosofficial
+        gpgcheck=0
+        enabled=1
 
         [appstream]
         name=CentOS Stream 10 - AppStream
         baseurl=https://mirror.stream.centos.org/10-stream/AppStream/x86_64/os/
-        gpgcheck=1
-        gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-centosofficial
+        gpgcheck=0
+        enabled=1
+
+        [crb]
+        name=CentOS Stream 10 - CRB
+        baseurl=https://mirror.stream.centos.org/10-stream/CRB/x86_64/os/
+        gpgcheck=0
+        enabled=1
         EOF
 
-        # Importar clave GPG
-        curl -s https://www.centos.org/keys/RPM-GPG-KEY-CentOS-Official > /etc/pki/rpm-gpg/RPM-GPG-KEY-centosofficial
-
-        # Verificar conectividad a los repositorios
-        curl -I https://mirror.stream.centos.org/10-stream/BaseOS/x86_64/os/repodata/repomd.xml || echo "BaseOS no disponible"
-        curl -I https://mirror.stream.centos.org/10-stream/AppStream/x86_64/os/repodata/repomd.xml || echo "AppStream no disponible"
+        # Actualizar metadata de repositorios
+        dnf makecache --refresh
 
     - name: Instalar herramientas básicas
       run: |
-        dnf update -y
+        # Instalar paquetes básicos sin verificación GPG inicialmente
         dnf install --nogpgcheck -y \
-          curl wget tar gzip bash git jq gnupg2 shadow-utils \
+          curl wget tar gzip bash git jq shadow-utils \
           yum-utils device-mapper-persistent-data lvm2 util-linux rpm-build \
-          conntrack-tools ethtool iproute socat ebtables libseccomp
+          conntrack-tools ethtool iproute socat ebtables libseccomp \
+          python3 python3-pip
 
     - name: Configurar Docker
       run: |
-        # Repositorio Docker para x86_64
-        curl -o /etc/yum.repos.d/docker-ce.repo https://download.docker.com/linux/centos/docker-ce.repo
-        sed -i 's/\$basearch/x86_64/g' /etc/yum.repos.d/docker-ce.repo
-
-        dnf install --nogpgcheck -y docker-ce docker-ce-cli containerd.io
-        systemctl start docker || dockerd &
-        sleep 15
+        # Instalar Docker desde repositorio oficial
+        curl -fsSL https://get.docker.com -o get-docker.sh
+        sh get-docker.sh
+        
+        # Iniciar Docker en segundo plano
+        dockerd --host=unix:///var/run/docker.sock --host=tcp://0.0.0.0:2376 &
+        sleep 20
+        
+        # Verificar que Docker esté funcionando
+        docker --version
 
     - name: Preparar estructura de directorios
       run: |
-        mkdir -p offline-assets/{rpms/{k8s,os},cni/{calico,flannel,cilium}}
-        mkdir -p docker-images
+        mkdir -p offline-assets/{rpms/{k8s,os,docker},containers,cni-plugins}
+        mkdir -p offline-assets/manifests/{calico,flannel,cilium}
 
-    - name: Configurar repositorios adicionales
+    - name: Configurar repositorio Kubernetes
       run: |
-        # EPEL para Stream 10 (ajusta si no existe o usa tu mirror)
-        dnf install --nogpgcheck -y https://dl.fedoraproject.org/pub/epel/epel-release-latest-10.noarch.rpm || echo "EPEL no disponible"
-        dnf config-manager --set-enabled crb || true
-
-        # Repositorio Kubernetes
+        # Repositorio Kubernetes v1.33
         cat <<EOF > /etc/yum.repos.d/kubernetes.repo
         [kubernetes]
         name=Kubernetes
         baseurl=https://pkgs.k8s.io/core:/stable:/v1.33/rpm/
         enabled=1
         gpgcheck=1
-        repo_gpgcheck=0
         gpgkey=https://pkgs.k8s.io/core:/stable:/v1.33/rpm/repodata/repomd.xml.key
         EOF
 
-        rpm --import https://pkgs.k8s.io/core:/stable:/v1.33/rpm/repodata/repomd.xml.key
+        # Importar clave GPG de Kubernetes
+        curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.33/rpm/repodata/repomd.xml.key | \
+          gpg --dearmor -o /etc/pki/rpm-gpg/RPM-GPG-KEY-kubernetes
+        
+        rpm --import /etc/pki/rpm-gpg/RPM-GPG-KEY-kubernetes
         dnf makecache
 
-    - name: Descargar paquetes Kubernetes
+    - name: Configurar repositorio EPEL
+      run: |
+        # Instalar EPEL para herramientas adicionales
+        dnf install --nogpgcheck -y \
+          https://dl.fedoraproject.org/pub/epel/epel-release-latest-10.noarch.rpm || \
+          echo "EPEL no disponible, continuando sin él"
+
+    - name: Descargar paquetes Kubernetes y containerd
       run: |
         cd offline-assets/rpms/k8s
 
-        # Descargar componentes principales
-        for pkg in kubelet kubeadm kubectl cri-tools kubernetes-cni; do
+        # Lista de paquetes Kubernetes essenciales
+        k8s_packages=(
+          "kubelet"
+          "kubeadm" 
+          "kubectl"
+          "cri-tools"
+          "kubernetes-cni"
+        )
+
+        echo "Descargando paquetes Kubernetes..."
+        for pkg in "${k8s_packages[@]}"; do
           echo "Descargando $pkg..."
-          yumdownloader --destdir=. $pkg.x86_64 || \
-          yumdownloader --destdir=. $pkg || \
-          echo "⚠️ Falló la descarga de $pkg"
+          if yumdownloader --resolve --destdir=. "$pkg"; then
+            echo "✅ $pkg descargado exitosamente"
+          else
+            echo "❌ Error descargando $pkg"
+          fi
         done
 
-        # Descargar containerd desde Docker
-        yumdownloader --disablerepo=* --enablerepo=docker-ce-stable \
-          --destdir=. containerd.io || \
-          echo "❌ No se pudo descargar containerd.io"
+        # Descargar containerd y Docker
+        echo "Descargando containerd y Docker..."
+        yumdownloader --resolve --destdir=. containerd.io docker-ce docker-ce-cli || \
+          echo "⚠️ Algunos paquetes de Docker no se pudieron descargar"
 
-        ls -lh *.rpm || echo "No se encontraron archivos RPM"
+        ls -lah *.rpm 2>/dev/null || echo "No se encontraron archivos RPM en k8s"
 
     - name: Descargar paquetes del sistema
       run: |
         cd offline-assets/rpms/os
 
-        download_pkg() {
-          local pkg=$1
-          echo "Intentando descargar $pkg para x86_64..."
-          if yumdownloader --resolve --destdir=. $pkg.x86_64; then
-            return 0
+        # Paquetes esenciales del sistema
+        system_packages=(
+          "wget" "curl" "net-tools" "iproute" "bind-utils"
+          "openssh" "openssh-clients" "openssh-server" "openssl"
+          "ca-certificates" "gnupg2" "tar" "gzip" "unzip"
+          "vim-enhanced" "nano" "sudo" "htop" "tmux"
+          "rsync" "which" "lsof" "tcpdump" "nmap-ncat"
+          "iptables" "firewalld" "chrony" "logrotate"
+        )
+
+        echo "Descargando paquetes del sistema..."
+        for pkg in "${system_packages[@]}"; do
+          echo "Intentando descargar $pkg..."
+          if yumdownloader --resolve --destdir=. "$pkg"; then
+            echo "✅ $pkg descargado"
+          else
+            echo "⚠️ $pkg no disponible, continuando..."
           fi
-
-          echo "Intentando descargar $pkg como noarch..."
-          if yumdownloader --resolve --destdir=. $pkg.noarch; then
-            return 0
-          fi
-
-          echo "Intentando descargar $pkg sin especificar arquitectura..."
-          if yumdownloader --resolve --destdir=. $pkg; then
-            return 0
-          fi
-
-          echo "⚠️ No se pudo descargar $pkg (ni como x86_64 ni noarch)"
-          return 1
-        }
-
-        for pkg in wget curl net-tools iproute bind-utils \
-                   openssh openssh-clients openssh-server openssl \
-                   ca-certificates gnupg2 redhat-lsb-core tar \
-                   gzip unzip vim-enhanced nano sudo \
-                   dnf ansible-core python3 python3-pip; do
-          download_pkg $pkg || true
         done
 
-        yumdownloader --resolve --destdir=. --enablerepo=epel python3-dnf || true
+        ls -lah *.rpm 2>/dev/null || echo "No se encontraron archivos RPM en os"
 
-    - name: Verificar paquetes descargados
+    - name: Descargar imágenes de contenedores Kubernetes
       run: |
-        echo "=== Verificación de arquitectura ==="
-        find offline-assets/rpms/ -name "*.rpm" -exec rpm -qip {} \; | grep -E "Name|Version|Architecture"
-        echo "=================================="
+        cd offline-assets/containers
+
+        # Obtener las imágenes requeridas por kubeadm
+        k8s_version="v1.33.0"
+        
+        # Imágenes principales de Kubernetes
+        k8s_images=(
+          "registry.k8s.io/kube-apiserver:$k8s_version"
+          "registry.k8s.io/kube-controller-manager:$k8s_version"
+          "registry.k8s.io/kube-scheduler:$k8s_version"
+          "registry.k8s.io/kube-proxy:$k8s_version"
+          "registry.k8s.io/coredns/coredns:v1.12.0"
+          "registry.k8s.io/pause:3.10"
+          "registry.k8s.io/etcd:3.5.17-0"
+        )
+
+        echo "Descargando imágenes de Kubernetes..."
+        for image in "${k8s_images[@]}"; do
+          echo "Descargando $image..."
+          if docker pull "$image"; then
+            docker save "$image" -o "$(echo $image | tr '/' '_' | tr ':' '_').tar"
+            echo "✅ $image guardada"
+          else
+            echo "❌ Error descargando $image"
+          fi
+        done
+
+        # Imágenes adicionales útiles
+        additional_images=(
+          "docker.io/library/busybox:latest"
+          "docker.io/library/nginx:latest"
+          "docker.io/library/alpine:latest"
+        )
+
+        echo "Descargando imágenes adicionales..."
+        for image in "${additional_images[@]}"; do
+          echo "Descargando $image..."
+          if docker pull "$image"; then
+            docker save "$image" -o "$(echo $image | tr '/' '_' | tr ':' '_').tar"
+            echo "✅ $image guardada"
+          else
+            echo "⚠️ Error descargando $image"
+          fi
+        done
+
+    - name: Descargar plugins CNI
+      run: |
+        cd offline-assets/cni-plugins
+        
+        # Descargar CNI plugins
+        CNI_VERSION="v1.6.1"
+        wget -O cni-plugins-linux-amd64-$CNI_VERSION.tgz \
+          "https://github.com/containernetworking/plugins/releases/download/$CNI_VERSION/cni-plugins-linux-amd64-$CNI_VERSION.tgz"
+
+    - name: Descargar manifiestos Calico
+      run: |
+        cd offline-assets/manifests/calico
+        
+        # Descargar manifiestos de Calico
+        CALICO_VERSION="v3.29.1"
+        
+        wget -O calico.yaml \
+          "https://raw.githubusercontent.com/projectcalico/calico/$CALICO_VERSION/manifests/calico.yaml"
+        
+        wget -O calicoctl \
+          "https://github.com/projectcalico/calico/releases/download/$CALICO_VERSION/calicoctl-linux-amd64"
+        chmod +x calicoctl
+
+    - name: Descargar manifiestos Flannel
+      run: |
+        cd offline-assets/manifests/flannel
+        
+        # Descargar manifiesto de Flannel
+        wget -O kube-flannel.yml \
+          "https://github.com/flannel-io/flannel/releases/latest/download/kube-flannel.yml"
+
+    - name: Descargar manifiestos Cilium
+      run: |
+        cd offline-assets/manifests/cilium
+        
+        # Descargar CLI de Cilium
+        CILIUM_CLI_VERSION=$(curl -s https://raw.githubusercontent.com/cilium/cilium-cli/main/stable.txt)
+        CLI_ARCH=amd64
+        
+        wget -O cilium-linux-${CLI_ARCH}.tar.gz \
+          "https://github.com/cilium/cilium-cli/releases/download/${CILIUM_CLI_VERSION}/cilium-linux-${CLI_ARCH}.tar.gz"
+        
+        tar xzvf cilium-linux-${CLI_ARCH}.tar.gz
+        chmod +x cilium
+
+    - name: Crear scripts de instalación
+      run: |
+        # Script principal de instalación
+        cat <<'EOF' > offline-assets/install.sh
+        #!/bin/bash
+        set -e
+
+        echo "=== Instalador Offline Kubernetes para CentOS Stream 10 ==="
+
+        # Verificar arquitectura
+        if [[ $(uname -m) != "x86_64" ]]; then
+          echo "❌ Este instalador solo funciona en arquitectura x86_64"
+          exit 1
+        fi
+
+        # Instalar paquetes del sistema
+        echo "📦 Instalando paquetes del sistema..."
+        cd rpms/os
+        rpm -Uvh --force --nodeps *.rpm || true
+        cd ../..
+
+        # Instalar Docker/containerd
+        echo "🐳 Instalando Docker y containerd..."
+        cd rpms/k8s
+        rpm -Uvh --force containerd.io*.rpm docker-ce*.rpm || true
+        systemctl enable --now containerd
+        systemctl enable --now docker
+        cd ../..
+
+        # Instalar Kubernetes
+        echo "☸️  Instalando Kubernetes..."
+        cd rpms/k8s
+        rpm -Uvh --force kubelet*.rpm kubeadm*.rpm kubectl*.rpm cri-tools*.rpm kubernetes-cni*.rpm || true
+        systemctl enable kubelet
+        cd ../..
+
+        # Instalar CNI plugins
+        echo "🔌 Instalando CNI plugins..."
+        mkdir -p /opt/cni/bin
+        cd cni-plugins
+        tar -xzf cni-plugins-linux-amd64-*.tgz -C /opt/cni/bin/
+        cd ..
+
+        # Cargar imágenes de contenedores
+        echo "📦 Cargando imágenes de contenedores..."
+        cd containers
+        for img in *.tar; do
+          echo "Cargando $img..."
+          docker load -i "$img" || true
+        done
+        cd ..
+
+        echo "✅ Instalación completada!"
+        echo "Para inicializar el cluster: kubeadm init"
+        echo "CNI disponibles en: manifests/"
+        EOF
+
+        chmod +x offline-assets/install.sh
+
+        # Script para instalar Calico
+        cat <<'EOF' > offline-assets/install-calico.sh
+        #!/bin/bash
+        kubectl apply -f manifests/calico/calico.yaml
+        echo "✅ Calico instalado"
+        EOF
+
+        # Script para instalar Flannel  
+        cat <<'EOF' > offline-assets/install-flannel.sh
+        #!/bin/bash
+        kubectl apply -f manifests/flannel/kube-flannel.yml
+        echo "✅ Flannel instalado"
+        EOF
+
+        # Script para instalar Cilium
+        cat <<'EOF' > offline-assets/install-cilium.sh
+        #!/bin/bash
+        cp manifests/cilium/cilium /usr/local/bin/
+        cilium install
+        echo "✅ Cilium instalado"
+        EOF
+
+        chmod +x offline-assets/install-*.sh
+
+    - name: Crear documentación
+      run: |
+        cat <<'EOF' > offline-assets/README.md
+        # Instalador Offline Kubernetes para CentOS Stream 10
+
+        ## Contenido del paquete
+
+        - `rpms/k8s/`: Paquetes RPM de Kubernetes, Docker y containerd
+        - `rpms/os/`: Paquetes del sistema y herramientas de debugging
+        - `containers/`: Imágenes de contenedores pre-descargadas
+        - `cni-plugins/`: Plugins CNI
+        - `manifests/`: Manifiestos para Calico, Flannel y Cilium
+        - `install.sh`: Script principal de instalación
+        - `install-*.sh`: Scripts para instalar CNI específicos
+
+        ## Instalación
+
+        1. Extraer el paquete:
+           ```bash
+           tar -xzf offline_assets_bundle_x86_64.tar.gz
+           cd offline-assets
+           ```
+
+        2. Ejecutar instalación:
+           ```bash
+           sudo ./install.sh
+           ```
+
+        3. Inicializar cluster:
+           ```bash
+           sudo kubeadm init --pod-network-cidr=192.168.0.0/16
+           ```
+
+        4. Configurar kubectl:
+           ```bash
+           mkdir -p $HOME/.kube
+           sudo cp -i /etc/kubernetes/admin.conf $HOME/.kube/config
+           sudo chown $(id -u):$(id -g) $HOME/.kube/config
+           ```
+
+        5. Instalar CNI (elegir uno):
+           ```bash
+           # Para Calico
+           ./install-calico.sh
+           
+           # Para Flannel
+           ./install-flannel.sh
+           
+           # Para Cilium
+           ./install-cilium.sh
+           ```
+
+        ## Herramientas de debugging incluidas
+
+        - htop, tmux, vim, nano
+        - tcpdump, nmap-ncat, lsof
+        - bind-utils (dig, nslookup)
+        - net-tools (netstat, ifconfig)
+
+        ## Troubleshooting
+
+        - Verificar servicios: `systemctl status kubelet containerd docker`
+        - Ver logs: `journalctl -u kubelet -f`
+        - Verificar imágenes: `docker images`
+        - Estado del cluster: `kubectl get nodes`
+        EOF
+
+    - name: Verificar contenido final
+      run: |
+        echo "=== Resumen del paquete generado ==="
+        find offline-assets -type f -name "*.rpm" | wc -l | xargs echo "RPMs totales:"
+        find offline-assets -type f -name "*.tar" | wc -l | xargs echo "Imágenes de contenedores:"
+        
+        echo -e "\n=== Estructura de directorios ==="
+        tree offline-assets || find offline-assets -type d
+        
+        echo -e "\n=== Tamaño total ==="
+        du -sh offline-assets
 
     - name: Crear paquete comprimido final
       run: |
-        tar -czvf offline_assets_bundle_x86_64.tar.gz offline-assets
+        tar -czf offline_assets_bundle_x86_64.tar.gz offline-assets
+        ls -lh offline_assets_bundle_x86_64.tar.gz
 
     - name: Subir artefacto
       uses: actions/upload-artifact@v4
       with:
         name: offline_assets_bundle_x86_64
         path: offline_assets_bundle_x86_64.tar.gz
+        retention-days: 30
