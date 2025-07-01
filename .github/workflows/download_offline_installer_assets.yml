@@ -242,7 +242,7 @@ jobs:
         cd offline-assets/cni-plugins
         
         # Descargar CNI plugins
-        CNI_VERSION="v1.6.1"
+        CNI_VERSION="v1.7.1"
         wget -O cni-plugins-linux-amd64-$CNI_VERSION.tgz \
           "https://github.com/containernetworking/plugins/releases/download/$CNI_VERSION/cni-plugins-linux-amd64-$CNI_VERSION.tgz"
 
