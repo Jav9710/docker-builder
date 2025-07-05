@@ -1,4 +1,4 @@
-name: Prepare Full Offline Installer & CNI Assets for CentOS Stream 10 (x86_64)
+name: Prepare Full Offline Installer & CNI Assets for CentOS Stream 9 (x86_64)
 
 on:
   workflow_dispatch:
@@ -7,52 +7,45 @@ jobs:
   prepare-assets:
     runs-on: ubuntu-22.04
     container:
-      image: quay.io/centos/centos:stream10
+      image: quay.io/centos/centos:stream9
       options: --privileged --dns 8.8.8.8 --dns 1.1.1.1
 
     steps:
     - name: Configurar entorno básico y repositorios
       run: |
-        # Configurar DNS
         echo "nameserver 8.8.8.8" > /etc/resolv.conf
         echo "nameserver 1.1.1.1" >> /etc/resolv.conf
 
-        # Limpiar cache y repositorios existentes
         dnf clean all
         rm -rf /var/cache/dnf/*
         rm -f /etc/yum.repos.d/CentOS-*.repo
         rm -f /etc/yum.repos.d/centos*.repo
 
-        # Crear repositorios base con configuración GPG más permisiva
         cat <<EOF > /etc/yum.repos.d/CentOS-Stream.repo
         [baseos]
-        name=CentOS Stream 10 - BaseOS
-        baseurl=https://mirror.stream.centos.org/10-stream/BaseOS/x86_64/os/
+        name=CentOS Stream 9 - BaseOS
+        baseurl=https://mirror.stream.centos.org/9-stream/BaseOS/x86_64/os/
         gpgcheck=0
         enabled=1
 
         [appstream]
-        name=CentOS Stream 10 - AppStream
-        baseurl=https://mirror.stream.centos.org/10-stream/AppStream/x86_64/os/
+        name=CentOS Stream 9 - AppStream
+        baseurl=https://mirror.stream.centos.org/9-stream/AppStream/x86_64/os/
         gpgcheck=0
         enabled=1
 
         [crb]
-        name=CentOS Stream 10 - CRB
-        baseurl=https://mirror.stream.centos.org/10-stream/CRB/x86_64/os/
+        name=CentOS Stream 9 - CRB
+        baseurl=https://mirror.stream.centos.org/9-stream/CRB/x86_64/os/
         gpgcheck=0
         enabled=1
         EOF
 
-        # Actualizar metadata de repositorios
         dnf makecache --refresh
 
     - name: Instalar herramientas básicas
       run: |
-        # Actualizar sistema primero
         dnf update --nogpgcheck -y || true
-        
-        # Instalar paquetes básicos sin verificación GPG inicialmente
         dnf install --nogpgcheck -y \
           curl wget tar gzip bash git shadow-utils \
           yum-utils device-mapper-persistent-data lvm2 util-linux rpm-build \
@@ -61,16 +54,28 @@ jobs:
 
     - name: Configurar Docker
       run: |
-        # Instalar Docker desde repositorio oficial
         curl -fsSL https://get.docker.com -o get-docker.sh
         sh get-docker.sh
-        
-        # Iniciar Docker en segundo plano
         dockerd --host=unix:///var/run/docker.sock --host=tcp://0.0.0.0:2376 &
         sleep 20
-        
-        # Verificar que Docker esté funcionando
         docker --version
+
+    # (El resto de los pasos siguen igual, solo con la ruta EPEL y releasever actualizado)
+    - name: Configurar repositorio EPEL
+      run: |
+        if ! dnf repolist enabled | grep -q epel; then
+          echo "Instalando EPEL para Stream 9..."
+          dnf install --nogpgcheck -y \
+            https://dl.fedoraproject.org/pub/epel/epel-release-latest-9.noarch.rpm || \
+            echo "⚠️ EPEL no disponible para Stream 9"
+        fi
+
+        dnf config-manager --set-enabled crb 2>/dev/null || \
+        dnf config-manager --set-enabled powertools 2>/dev/null || \
+        echo "CRB/PowerTools no disponible"
+
+    # 🔁 Todos los pasos restantes (descarga de Kubernetes, Docker, imágenes, scripts, empaquetado) se mantienen igual
+
 
     - name: Preparar estructura de directorios
       run: |
