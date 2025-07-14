@@ -1,0 +1,325 @@
+name: Build Ansible Offline Package
+
+on:
+  workflow_dispatch:
+    inputs:
+      ansible_version:
+        description: 'Ansible version to download (leave empty for latest)'
+        required: false
+        default: ''
+      oracle_linux_version:
+        description: 'Oracle Linux version'
+        required: true
+        default: '9'
+        type: choice
+        options:
+          - '8'
+          - '9'
+      architecture:
+        description: 'Target architecture'
+        required: true
+        default: 'x86_64'
+        type: choice
+        options:
+          - 'x86_64'
+          - 'aarch64'
+  
+  push:
+    branches: [ main, develop ]
+    paths:
+      - '.github/workflows/ansible-offline.yml'
+
+jobs:
+  build-ansible-package:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+    
+    - name: Set up Oracle Linux container
+      run: |
+        # Crear directorio de trabajo
+        mkdir -p ansible-offline-package
+        
+        # Seleccionar imagen basada en la versión
+        if [ "${{ github.event.inputs.oracle_linux_version }}" == "8" ]; then
+          IMAGE="oraclelinux:8"
+        else
+          IMAGE="oraclelinux:9"
+        fi
+        
+        echo "Using image: $IMAGE"
+        echo "ORACLE_IMAGE=$IMAGE" >> $GITHUB_ENV
+    
+    - name: Download Ansible RPMs
+      run: |
+        # Crear script para descargar dentro del container
+        cat > download_ansible.sh << 'EOF'
+        #!/bin/bash
+        set -e
+        
+        # Configurar repositorios
+        dnf update -y
+        dnf install -y epel-release
+        dnf install -y yum-utils createrepo
+        
+        # Crear directorio de descarga
+        mkdir -p /ansible-rpms
+        cd /ansible-rpms
+        
+        # Determinar paquete de Ansible a descargar
+        if [ -n "$ANSIBLE_VERSION" ] && [ "$ANSIBLE_VERSION" != "" ]; then
+          ANSIBLE_PACKAGE="ansible-core-$ANSIBLE_VERSION"
+        else
+          ANSIBLE_PACKAGE="ansible-core"
+        fi
+        
+        echo "Downloading $ANSIBLE_PACKAGE..."
+        
+        # Descargar Ansible y todas sus dependencias
+        dnf download --resolve $ANSIBLE_PACKAGE
+        
+        # Descargar paquetes adicionales útiles
+        dnf download --resolve python3-pip || true
+        dnf download --resolve python3-setuptools || true
+        dnf download --resolve python3-jinja2 || true
+        dnf download --resolve python3-yaml || true
+        dnf download --resolve python3-paramiko || true
+        dnf download --resolve python3-cryptography || true
+        dnf download --resolve sshpass || true
+        dnf download --resolve rsync || true
+        dnf download --resolve git || true
+        
+        # Crear metadata del repositorio
+        createrepo .
+        
+        # Crear script de instalación
+        cat > install-ansible.sh << 'INSTALL_EOF'
+        #!/bin/bash
+        
+        echo "=== Ansible Offline Installer ==="
+        echo "Este script instalará Ansible y sus dependencias en Oracle Linux"
+        echo
+        
+        # Verificar que estamos ejecutando como root
+        if [ "$EUID" -ne 0 ]; then
+          echo "Error: Este script debe ejecutarse como root o con sudo"
+          exit 1
+        fi
+        
+        # Obtener directorio actual
+        SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+        
+        echo "Instalando RPMs desde: $SCRIPT_DIR"
+        
+        # Instalar todos los RPMs
+        echo "Instalando paquetes..."
+        dnf localinstall -y *.rpm
+        
+        # Verificar instalación
+        echo
+        echo "Verificando instalación..."
+        if command -v ansible >/dev/null 2>&1; then
+          echo "✓ Ansible instalado correctamente"
+          ansible --version
+        elif command -v ansible-playbook >/dev/null 2>&1; then
+          echo "✓ Ansible-core instalado correctamente"
+          ansible-playbook --version
+        else
+          echo "✗ Error: Ansible no se instaló correctamente"
+          exit 1
+        fi
+        
+        echo
+        echo "¡Instalación completada exitosamente!"
+        echo "Puedes empezar a usar Ansible ahora."
+        INSTALL_EOF
+        
+        chmod +x install-ansible.sh
+        
+        # Crear archivo README
+        cat > README.md << 'README_EOF'
+        # Ansible Offline Package
+        
+        Este paquete contiene Ansible y todas sus dependencias para Oracle Linux.
+        
+        ## Información del paquete
+        - **Fecha de creación**: $(date)
+        - **Oracle Linux**: $ORACLE_VERSION
+        - **Arquitectura**: $ARCHITECTURE
+        - **Ansible Version**: $ANSIBLE_VERSION (o latest)
+        
+        ## Instalación
+        
+        1. Extraer el archivo en el servidor de destino:
+           ```bash
+           cd /tmp
+           unrar x ansible-offline-package.rar
+           # o si no tienes unrar:
+           # tar -xzf ansible-offline-package.tar.gz
+           ```
+        
+        2. Ejecutar el script de instalación:
+           ```bash
+           cd ansible-offline-package
+           sudo ./install-ansible.sh
+           ```
+        
+        ## Instalación manual
+        
+        Si prefieres instalar manualmente:
+        
+        ```bash
+        cd ansible-offline-package
+        sudo dnf localinstall -y *.rpm
+        ```
+        
+        ## Verificación
+        
+        Después de la instalación, verifica que Ansible funciona:
+        
+        ```bash
+        ansible --version
+        ansible-playbook --version
+        ```
+        
+        ## Contenido del paquete
+        
+        - `*.rpm` - Paquetes RPM de Ansible y dependencias
+        - `repodata/` - Metadata del repositorio local
+        - `install-ansible.sh` - Script automático de instalación
+        - `README.md` - Este archivo
+        
+        ## Resolución de problemas
+        
+        Si encuentras problemas de dependencias:
+        
+        1. Verifica que estás en Oracle Linux $ORACLE_VERSION
+        2. Asegúrate de tener los repositorios base habilitados
+        3. Instala los paquetes en el orden correcto:
+           ```bash
+           sudo rpm -ivh python3-*.rpm
+           sudo rpm -ivh ansible-core-*.rpm
+           ```
+        README_EOF
+        
+        # Listar archivos descargados
+        echo
+        echo "=== Archivos descargados ==="
+        ls -la *.rpm
+        echo
+        echo "Total de archivos: $(ls -1 *.rpm | wc -l)"
+        echo "Tamaño total: $(du -sh . | cut -f1)"
+        EOF
+        
+        # Hacer ejecutable el script
+        chmod +x download_ansible.sh
+        
+        # Ejecutar en container Oracle Linux
+        docker run --rm \
+          -v "$(pwd):/workspace" \
+          -v "$(pwd)/ansible-offline-package:/ansible-rpms" \
+          -e "ANSIBLE_VERSION=${{ github.event.inputs.ansible_version }}" \
+          -e "ORACLE_VERSION=${{ github.event.inputs.oracle_linux_version }}" \
+          -e "ARCHITECTURE=${{ github.event.inputs.architecture }}" \
+          --platform linux/${{ github.event.inputs.architecture }} \
+          ${{ env.ORACLE_IMAGE }} \
+          bash /workspace/download_ansible.sh
+    
+    - name: Install RAR utility
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y rar
+    
+    - name: Create compressed package
+      run: |
+        cd ansible-offline-package
+        
+        # Crear archivo de información del build
+        cat > build-info.txt << EOF
+        Build Information
+        ================
+        Date: $(date)
+        Oracle Linux: ${{ github.event.inputs.oracle_linux_version }}
+        Architecture: ${{ github.event.inputs.architecture }}
+        Ansible Version: ${{ github.event.inputs.ansible_version }}
+        GitHub Action: ${{ github.run_id }}
+        Repository: ${{ github.repository }}
+        Commit: ${{ github.sha }}
+        EOF
+        
+        # Crear paquete RAR
+        rar a -r ../ansible-offline-package.rar .
+        
+        # Crear también un TAR.GZ como alternativa
+        tar -czf ../ansible-offline-package.tar.gz .
+        
+        cd ..
+        
+        # Mostrar información del paquete
+        echo "=== Información del paquete ==="
+        ls -lh ansible-offline-package.rar
+        ls -lh ansible-offline-package.tar.gz
+        echo
+        echo "Contenido del paquete:"
+        rar l ansible-offline-package.rar
+    
+    - name: Upload RAR artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: ansible-offline-package-ol${{ github.event.inputs.oracle_linux_version }}-${{ github.event.inputs.architecture }}
+        path: |
+          ansible-offline-package.rar
+          ansible-offline-package.tar.gz
+        retention-days: 30
+    
+    - name: Create release (if on main branch)
+      if: github.ref == 'refs/heads/main'
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: ansible-offline-${{ github.run_number }}
+        name: Ansible Offline Package - OL${{ github.event.inputs.oracle_linux_version }}
+        body: |
+          # Ansible Offline Package
+          
+          **Oracle Linux**: ${{ github.event.inputs.oracle_linux_version }}
+          **Architecture**: ${{ github.event.inputs.architecture }}
+          **Ansible Version**: ${{ github.event.inputs.ansible_version || 'latest' }}
+          **Build Date**: ${{ github.event.head_commit.timestamp }}
+          
+          ## Instalación
+          
+          1. Descargar `ansible-offline-package.rar` o `ansible-offline-package.tar.gz`
+          2. Extraer en el servidor destino
+          3. Ejecutar `sudo ./install-ansible.sh`
+          
+          ## Verificación
+          
+          ```bash
+          ansible --version
+          ```
+        files: |
+          ansible-offline-package.rar
+          ansible-offline-package.tar.gz
+        draft: false
+        prerelease: false
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    
+    - name: Summary
+      run: |
+        echo "## 📦 Ansible Offline Package Created" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**Oracle Linux**: ${{ github.event.inputs.oracle_linux_version }}" >> $GITHUB_STEP_SUMMARY
+        echo "**Architecture**: ${{ github.event.inputs.architecture }}" >> $GITHUB_STEP_SUMMARY
+        echo "**Ansible Version**: ${{ github.event.inputs.ansible_version || 'latest' }}" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### 📁 Artifacts" >> $GITHUB_STEP_SUMMARY
+        echo "- \`ansible-offline-package.rar\` - $(ls -lh ansible-offline-package.rar | awk '{print $5}')" >> $GITHUB_STEP_SUMMARY
+        echo "- \`ansible-offline-package.tar.gz\` - $(ls -lh ansible-offline-package.tar.gz | awk '{print $5}')" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### 🚀 Installation" >> $GITHUB_STEP_SUMMARY
+        echo "1. Download the artifact from this workflow" >> $GITHUB_STEP_SUMMARY
+        echo "2. Extract on target server: \`unrar x ansible-offline-package.rar\`" >> $GITHUB_STEP_SUMMARY
+        echo "3. Run: \`sudo ./install-ansible.sh\`" >> $GITHUB_STEP_SUMMARY
