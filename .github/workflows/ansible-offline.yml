@@ -42,15 +42,34 @@ jobs:
         # Crear directorio de trabajo
         mkdir -p ansible-offline-package
         
+        # Configurar valores por defecto si no se proporcionan
+        ORACLE_VERSION="${{ github.event.inputs.oracle_linux_version }}"
+        ARCHITECTURE="${{ github.event.inputs.architecture }}"
+        
+        # Valores por defecto para push events
+        if [ -z "$ORACLE_VERSION" ] || [ "$ORACLE_VERSION" = "" ]; then
+          ORACLE_VERSION="9"
+        fi
+        
+        if [ -z "$ARCHITECTURE" ] || [ "$ARCHITECTURE" = "" ]; then
+          ARCHITECTURE="x86_64"
+        fi
+        
         # Seleccionar imagen basada en la versión
-        if [ "${{ github.event.inputs.oracle_linux_version }}" == "8" ]; then
+        if [ "$ORACLE_VERSION" = "8" ]; then
           IMAGE="oraclelinux:8"
         else
           IMAGE="oraclelinux:9"
         fi
         
+        echo "Using Oracle Linux version: $ORACLE_VERSION"
+        echo "Using architecture: $ARCHITECTURE"
         echo "Using image: $IMAGE"
+        
+        # Guardar en environment
         echo "ORACLE_IMAGE=$IMAGE" >> $GITHUB_ENV
+        echo "ORACLE_VERSION=$ORACLE_VERSION" >> $GITHUB_ENV
+        echo "TARGET_ARCHITECTURE=$ARCHITECTURE" >> $GITHUB_ENV
     
     - name: Download Ansible RPMs
       run: |
@@ -216,14 +235,29 @@ jobs:
         # Hacer ejecutable el script
         chmod +x download_ansible.sh
         
+        # Configurar plataforma
+        ARCH="${{ env.TARGET_ARCHITECTURE }}"
+        
+        # Convertir arquitectura para Docker
+        if [ "$ARCH" = "x86_64" ]; then
+          DOCKER_PLATFORM="linux/amd64"
+        elif [ "$ARCH" = "aarch64" ]; then
+          DOCKER_PLATFORM="linux/arm64"
+        else
+          DOCKER_PLATFORM="linux/amd64"
+        fi
+        
+        echo "Using architecture: $ARCH"
+        echo "Docker platform: $DOCKER_PLATFORM"
+        
         # Ejecutar en container Oracle Linux
         docker run --rm \
           -v "$(pwd):/workspace" \
           -v "$(pwd)/ansible-offline-package:/ansible-rpms" \
           -e "ANSIBLE_VERSION=${{ github.event.inputs.ansible_version }}" \
-          -e "ORACLE_VERSION=${{ github.event.inputs.oracle_linux_version }}" \
-          -e "ARCHITECTURE=${{ github.event.inputs.architecture }}" \
-          --platform linux/${{ github.event.inputs.architecture }} \
+          -e "ORACLE_VERSION=${{ env.ORACLE_VERSION }}" \
+          -e "ARCHITECTURE=$ARCH" \
+          --platform "$DOCKER_PLATFORM" \
           ${{ env.ORACLE_IMAGE }} \
           bash /workspace/download_ansible.sh
     
@@ -268,7 +302,7 @@ jobs:
     - name: Upload RAR artifact
       uses: actions/upload-artifact@v4
       with:
-        name: ansible-offline-package-ol${{ github.event.inputs.oracle_linux_version }}-${{ github.event.inputs.architecture }}
+        name: ansible-offline-package-ol${{ env.ORACLE_VERSION }}-${{ env.TARGET_ARCHITECTURE }}
         path: |
           ansible-offline-package.rar
           ansible-offline-package.tar.gz
@@ -279,12 +313,12 @@ jobs:
       uses: softprops/action-gh-release@v1
       with:
         tag_name: ansible-offline-${{ github.run_number }}
-        name: Ansible Offline Package - OL${{ github.event.inputs.oracle_linux_version }}
+        name: Ansible Offline Package - OL${{ env.ORACLE_VERSION }}
         body: |
           # Ansible Offline Package
           
-          **Oracle Linux**: ${{ github.event.inputs.oracle_linux_version }}
-          **Architecture**: ${{ github.event.inputs.architecture }}
+          **Oracle Linux**: ${{ env.ORACLE_VERSION }}
+          **Architecture**: ${{ env.TARGET_ARCHITECTURE }}
           **Ansible Version**: ${{ github.event.inputs.ansible_version || 'latest' }}
           **Build Date**: ${{ github.event.head_commit.timestamp }}
           
@@ -311,8 +345,8 @@ jobs:
       run: |
         echo "## 📦 Ansible Offline Package Created" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
-        echo "**Oracle Linux**: ${{ github.event.inputs.oracle_linux_version }}" >> $GITHUB_STEP_SUMMARY
-        echo "**Architecture**: ${{ github.event.inputs.architecture }}" >> $GITHUB_STEP_SUMMARY
+        echo "**Oracle Linux**: ${{ env.ORACLE_VERSION }}" >> $GITHUB_STEP_SUMMARY
+        echo "**Architecture**: ${{ env.TARGET_ARCHITECTURE }}" >> $GITHUB_STEP_SUMMARY
         echo "**Ansible Version**: ${{ github.event.inputs.ansible_version || 'latest' }}" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
         echo "### 📁 Artifacts" >> $GITHUB_STEP_SUMMARY
