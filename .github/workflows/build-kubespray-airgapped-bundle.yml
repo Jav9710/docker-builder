@@ -56,7 +56,7 @@ jobs:
         df -h
 
     - name: Set up Python
-      uses: actions/setup-python@v4
+      uses: actions/setup-python@v5
       with:
         python-version: '3.11'
 
@@ -472,7 +472,7 @@ jobs:
         cat ${{ github.event.inputs.bundle_name }}.tar.gz.sha256
 
     - name: Upload bundle as artifact
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: ${{ github.event.inputs.bundle_name }}
         path: |
@@ -482,7 +482,7 @@ jobs:
 
     - name: Create release (optional)
       if: github.ref == 'refs/heads/main'
-      uses: softprops/action-gh-release@v1
+      uses: softprops/action-gh-release@v2
       with:
         tag_name: ${{ github.event.inputs.bundle_name }}-${{ github.run_number }}
         name: Kubespray Air-Gapped Bundle - ${{ github.event.inputs.bundle_name }}
