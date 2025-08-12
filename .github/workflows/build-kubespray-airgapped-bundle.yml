@@ -1,522 +1,269 @@
-# .github/workflows/build-kubespray-airgapped-bundle.yml
-name: Build Kubespray Air-Gapped Bundle
+name: "Kubespray: Build offline bundle"
 
 on:
   workflow_dispatch:
     inputs:
       kubespray_version:
-        description: 'Kubespray version (tag or branch)'
+        description: 'Kubespray release/tag to use'
         required: true
-        default: 'v2.28.0'
-        type: string
+        default: 'v2.27.0'   # o la versión que uses como base de Kubespray
       kubernetes_version:
-        description: 'Kubernetes version'
+        description: 'Kubernetes version to prepare'
         required: true
-        default: 'v1.32.7'
-        type: string
+        default: '1.31.9'
+      cni:
+        description: 'CNI to include (calico|cilium|flannel|weave|kube-ovn|kube-router|multus)'
+        required: true
+        default: 'calico'
+      etcd_version:
+        description: 'etcd version'
+        required: false
+        default: '3.5.21'
+      docker_version:
+        description: 'Docker Engine version'
+        required: false
+        default: '26.1'
       containerd_version:
-        description: 'Containerd version'
-        required: true
-        default: 'v2.1.3'
-        type: string
+        description: 'containerd version'
+        required: false
+        default: '1.7.27'
+      crio_version:
+        description: 'CRI-O version'
+        required: false
+        default: '1.31.6'
+      cni_plugins_version:
+        description: 'CNI plugins version'
+        required: false
+        default: '1.4.1'
       calico_version:
-        description: 'Calico version'
+        required: false
+        default: '3.29.4'
+      cilium_version:
+        required: false
+        default: '1.15.9'
+      flannel_version:
+        required: false
+        default: '0.22.0'
+      kube_ovn_version:
+        required: false
+        default: '1.12.21'
+      kube_router_version:
+        required: false
+        default: '2.0.0'
+      multus_version:
+        required: false
+        default: '3.8'
+      weave_version:
+        required: false
+        default: '2.8.7'
+      kube_vip_version:
+        required: false
+        default: '0.8.0'
+      cert_manager_version:
+        required: false
+        default: '1.15.3'
+      coredns_version:
+        required: false
+        default: '1.11.3'
+      ingress_nginx_version:
+        required: false
+        default: '1.12.1'
+      krew_version:
+        required: false
+        default: '0.4.4'
+      argocd_version:
+        required: false
+        default: '2.11.0'
+      helm_version:
+        required: false
+        default: '3.16.4'
+      metallb_version:
+        required: false
+        default: '0.13.9'
+      registry_version:
+        required: false
+        default: '2.8.1'
+      cephfs_provisioner_version:
+        required: false
+        default: '2.1.0-k8s1.11'
+      rbd_provisioner_version:
+        required: false
+        default: '2.1.1-k8s1.11'
+      aws_ebs_csi_plugin_version:
+        required: false
+        default: '0.5.0'
+      azure_csi_plugin_version:
+        required: false
+        default: '1.10.0'
+      cinder_csi_plugin_version:
+        required: false
+        default: '1.30.0'
+      gcp_pd_csi_plugin_version:
+        required: false
+        default: '1.9.2'
+      local_path_provisioner_version:
+        required: false
+        default: '0.0.24'
+      local_volume_provisioner_version:
+        required: false
+        default: '2.5.0'
+      node_feature_discovery_version:
+        required: false
+        default: '0.16.4'
+      target_os:
+        description: 'Target node OS'
         required: true
-        default: 'v3.30.1'
-        type: string
-      bundle_name:
-        description: 'Bundle name (without extension)'
-        required: true
-        default: 'kubespray-airgapped-centos9-amd64'
-        type: string
-
-env:
-  DOCKER_BUILDKIT: 1
-  BUILDX_NO_DEFAULT_ATTESTATIONS: 1
+        default: 'ubuntu22.04'
+      artifact_name:
+        description: 'Artifact name to produce'
+        required: false
+        default: 'kubespray-offline-artifact.tar.gz'
 
 jobs:
-  build-airgapped-bundle:
+  build-offline:
     runs-on: ubuntu-latest
-    timeout-minutes: 240
-    
+    permissions:
+      contents: read
+      id-token: write
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
-    - name: Free up disk space
-      run: |
-        echo "Liberando espacio en disco..."
-        sudo rm -rf /usr/share/dotnet
-        sudo rm -rf /usr/local/lib/android
-        sudo rm -rf /opt/ghc
-        sudo rm -rf /opt/hostedtoolcache/CodeQL
-        sudo docker system prune -af
-        sudo apt-get autoremove -y
-        sudo apt-get autoclean
-        df -h
+      - name: Setup Python (for running helper scripts)
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
 
-    - name: Set up Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.11'
+      - name: Install prerequisites
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y jq curl tar gzip ca-certificates git podman
 
-    - name: Clone Kubespray
-      run: |
-        echo "Clonando Kubespray ${{ github.event.inputs.kubespray_version }}"
-        git clone --depth 1 --branch ${{ github.event.inputs.kubespray_version }} \
-          https://github.com/kubernetes-sigs/kubespray.git kubespray
-        cd kubespray
-        echo "Kubespray version: $(git describe --tags --always)"
+      - name: Fetch Kubespray (requested tag)
+        env:
+          TAG: ${{ github.event.inputs.kubespray_version }}
+        run: |
+          set -e
+          rm -rf kubespray
+          git clone --depth 1 --branch "${TAG}" https://github.com/kubernetes-sigs/kubespray.git kubespray
+          echo "KUBESPRAY_DIR=$(pwd)/kubespray" > $GITHUB_ENV
 
-    - name: Install Python dependencies
-      run: |
-        cd kubespray
-        python -m pip install --upgrade pip
-        pip install -r requirements.txt
-        pip install ansible==8.7.0
+      - name: Create config for offline generation
+        run: |
+          mkdir -p offline-output
+          cat > offline-output/config.env <<EOF
+          KUBESPRAY_DIR=${{ env.KUBESPRAY_DIR }}
+          K8S_VERSION=${{ github.event.inputs.kubernetes_version }}
+          CNI=${{ github.event.inputs.cni }}
+          ETCD_VERSION=${{ github.event.inputs.etcd_version }}
+          CONTAINERD_VERSION=${{ github.event.inputs.containerd_version }}
+          TARGET_OS=${{ github.event.inputs.target_os }}
+          EXTRA_IMAGES='${{ github.event.inputs.download_extra_images }}'
+          ARTIFACT_NAME=${{ github.event.inputs.artifact_name }}
+          EOF
+          ls -la offline-output && cat offline-output/config.env
 
-    - name: Create bundle structure
-      run: |
-        mkdir -p airgapped-bundle/{images,files,kubespray-source}
-        mkdir -p airgapped-bundle/images/container-images
-        mkdir -p airgapped-bundle/files/binaries
-        
-        # Copiar código fuente de kubespray
-        cp -r kubespray/* airgapped-bundle/kubespray-source/
+      - name: Add offline-download helper script
+        run: |
+          cat > offline-output/generate-offline.sh <<'BASH'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          cd "$(dirname "$0")"
+          source ./config.env
 
-    - name: Configure Kubespray versions for CentOS 9
-      run: |
-        cd kubespray
-        
-        # Configurar versiones específicas para CentOS 9 AMD64
-        cat > version_overrides.yml << EOF
-        # Versiones personalizadas para CentOS 9 AMD64 air-gapped
-        kube_version: ${{ github.event.inputs.kubernetes_version }}
-        containerd_version: ${{ github.event.inputs.containerd_version }}
-        calico_version: ${{ github.event.inputs.calico_version }}
-        
-        # Arquitectura y OS
-        host_os: linux
-        image_arch: amd64
-        
-        # Versiones de componentes
-        cni_version: v1.5.0
-        etcd_version: v3.5.10
-        coredns_version: v1.10.1
-        pause_version: "3.9"
-        crictl_version: v1.29.0
-        runc_version: v1.1.12
-        
-        # Container runtime
-        container_manager: containerd
-        
-        # Configuración específica CentOS 9
-        ansible_python_interpreter: /usr/bin/python3
-        EOF
-        
-        # Aplicar configuraciones
-        cp version_overrides.yml roles/kubespray-defaults/defaults/main/
+          # 1) prepare work dirs
+          mkdir -p outputs/images outputs/binaries outputs/pypi outputs/os-pkgs
 
-    - name: Generate artifact lists
-      run: |
-        cd kubespray/contrib/offline
-        
-        echo "Configurando variables de entorno..."
-        export kube_version=${{ github.event.inputs.kubernetes_version }}
-        export containerd_version=${{ github.event.inputs.containerd_version }}
-        export calico_version=${{ github.event.inputs.calico_version }}
-        export host_os=linux
-        export image_arch=amd64
-        export cni_version=v1.5.0
-        export etcd_version=v3.5.10
-        export coredns_version=v1.10.1
-        export pause_version=3.9
-        export crictl_version=v1.29.0
-        export runc_version=v1.1.12
-        
-        echo "Generando listas de artefactos..."
-        bash generate_list.sh
-        
-        echo "=== Verificando archivos generados ==="
-        ls -la temp/
-        
-        echo "=== Conteo de recursos ==="
-        echo "Imágenes a descargar: $(grep -v '^#' temp/images.list | grep -v '^$' | wc -l)"
-        echo "Archivos a descargar: $(grep -v '^#' temp/files.list | grep -v '^$' | wc -l)"
-        
-        echo "=== Primeras 10 imágenes ==="
-        head -10 temp/images.list
-        
-        echo "=== Primeros 10 archivos ==="
-        head -10 temp/files.list
-        
-        # Copiar listas al bundle
-        cp temp/images.list ../../../airgapped-bundle/
-        cp temp/files.list ../../../airgapped-bundle/
+          # 2) get kubespray (already cloned)
+          KUBE_DIR="${KUBESPRAY_DIR}"
+          echo "Using Kubespray at ${KUBE_DIR}"
 
-    - name: Download container images
-      run: |
-        echo "=== DESCARGANDO IMÁGENES DOCKER ==="
-        
-        IMAGES_LIST="airgapped-bundle/images.list"
-        IMAGES_DIR="airgapped-bundle/images/container-images"
-        FAILED_IMAGES="airgapped-bundle/failed-images.log"
-        
-        mkdir -p "$IMAGES_DIR"
-        rm -f "$FAILED_IMAGES"
-        
-        # Contar total de imágenes
-        total_images=$(grep -v '^#' "$IMAGES_LIST" | grep -v '^$' | wc -l)
-        current=0
-        success=0
-        failed=0
-        
-        echo "Total de imágenes a descargar: $total_images"
-        echo "Iniciando descarga..."
-        
-        while IFS= read -r image; do
-            # Saltar comentarios y líneas vacías
-            [[ "$image" =~ ^#.*$ ]] || [[ -z "$image" ]] && continue
-            
-            current=$((current + 1))
-            echo ""
-            echo "[$current/$total_images] Procesando: $image"
-            
-            # Intentar descargar con reintentos
-            max_retries=3
-            retry=0
-            image_success=false
-            
-            while [ $retry -lt $max_retries ] && [ "$image_success" = false ]; do
-                echo "  Intento $((retry + 1)): Descargando..."
-                
-                if timeout 300 docker pull "$image" 2>/dev/null; then
-                    echo "  ✓ Descargado exitosamente"
-                    
-                    # Crear nombre de archivo seguro
-                    filename=$(echo "$image" | sed 's|/|_|g' | sed 's|:|_|g').tar
-                    
-                    echo "  Guardando como: $filename"
-                    if timeout 180 docker save "$image" -o "$IMAGES_DIR/$filename"; then
-                        echo "  ✓ Guardado exitosamente: $filename"
-                        
-                        # Verificar que el archivo no esté vacío
-                        if [ -s "$IMAGES_DIR/$filename" ]; then
-                            image_success=true
-                            success=$((success + 1))
-                        else
-                            echo "  ✗ Archivo vacío, reintentando..."
-                            rm -f "$IMAGES_DIR/$filename"
-                            retry=$((retry + 1))
-                        fi
-                    else
-                        echo "  ✗ Error guardando imagen"
-                        retry=$((retry + 1))
-                    fi
-                    
-                    # Limpiar imagen local para ahorrar espacio
-                    docker rmi "$image" 2>/dev/null || true
-                    
-                else
-                    echo "  ✗ Error descargando (intento $((retry + 1)))"
-                    retry=$((retry + 1))
-                    [ $retry -lt $max_retries ] && sleep 10
-                fi
-            done
-            
-            if [ "$image_success" = false ]; then
-                echo "  ✗ FALLÓ después de $max_retries intentos: $image"
-                echo "$image" >> "$FAILED_IMAGES"
-                failed=$((failed + 1))
-            fi
-            
-            # Mostrar progreso cada 10 imágenes
-            if [ $((current % 10)) -eq 0 ]; then
-                echo ""
-                echo "=== PROGRESO: $current/$total_images ($(($current * 100 / $total_images))%) ==="
-                echo "Exitosas: $success | Fallidas: $failed"
-                echo "Espacio usado: $(du -sh $IMAGES_DIR | cut -f1)"
-            fi
-            
-        done < "$IMAGES_LIST"
-        
-        echo ""
-        echo "=== RESUMEN FINAL DE IMÁGENES ==="
-        echo "Total procesadas: $current"
-        echo "Exitosas: $success"
-        echo "Fallidas: $failed"
-        echo "Tasa de éxito: $(($success * 100 / $current))%"
-        echo "Espacio total usado: $(du -sh $IMAGES_DIR | cut -f1)"
-        
-        if [ -f "$FAILED_IMAGES" ]; then
-            echo ""
-            echo "Imágenes que fallaron:"
-            cat "$FAILED_IMAGES"
-        fi
+          # 3) Resolve container image list from Kubespray roles (simple approach):
+          #    - Use the roles/download/defaults or group_vars to build images list
+          #    - For robustness we fall back to using a community generator (kubespray-offline)
+          #
+          # Try to use kubespray-offline if available (recommended); otherwise use a basic image gatherer.
+          if [ ! -d "kubespray-offline" ]; then
+            echo "Cloning kubespray-offline helper..."
+            git clone --depth 1 https://github.com/kubespray-offline/kubespray-offline.git || true
+          fi
 
-    - name: Download binary files
-      run: |
-        echo "=== DESCARGANDO ARCHIVOS BINARIOS ==="
-        
-        FILES_LIST="airgapped-bundle/files.list"
-        FILES_DIR="airgapped-bundle/files/binaries"
-        FAILED_FILES="airgapped-bundle/failed-files.log"
-        
-        mkdir -p "$FILES_DIR"
-        rm -f "$FAILED_FILES"
-        
-        # Contar total de archivos
-        total_files=$(grep -v '^#' "$FILES_LIST" | grep -v '^$' | wc -l)
-        current=0
-        success=0
-        failed=0
-        
-        echo "Total de archivos a descargar: $total_files"
-        echo "Iniciando descarga..."
-        
-        while IFS= read -r url; do
-            # Saltar comentarios y líneas vacías
-            [[ "$url" =~ ^#.*$ ]] || [[ -z "$url" ]] && continue
-            
-            current=$((current + 1))
-            echo ""
-            echo "[$current/$total_files] Descargando: $url"
-            
-            # Extraer información del archivo
-            filename=$(basename "$url")
-            relative_path=$(echo "$url" | sed 's|https\?://[^/]*/||')
-            dir_path=$(dirname "$relative_path")
-            
-            # Crear estructura de directorios
-            mkdir -p "$FILES_DIR/$dir_path"
-            target_file="$FILES_DIR/$relative_path"
-            
-            # Intentar descargar con reintentos
-            max_retries=3
-            retry=0
-            file_success=false
-            
-            while [ $retry -lt $max_retries ] && [ "$file_success" = false ]; do
-                echo "  Intento $((retry + 1)): $filename"
-                
-                if timeout 300 curl -L --fail --connect-timeout 30 --max-time 300 \
-                       --retry 2 --retry-delay 5 \
-                       -o "$target_file" "$url" 2>/dev/null; then
-                    
-                    # Verificar que el archivo no esté vacío
-                    if [ -s "$target_file" ]; then
-                        echo "  ✓ Descargado: $filename ($(du -sh "$target_file" | cut -f1))"
-                        file_success=true
-                        success=$((success + 1))
-                    else
-                        echo "  ✗ Archivo vacío, reintentando..."
-                        rm -f "$target_file"
-                        retry=$((retry + 1))
-                    fi
-                else
-                    echo "  ✗ Error descargando (intento $((retry + 1)))"
-                    retry=$((retry + 1))
-                    [ $retry -lt $max_retries ] && sleep 5
-                fi
-            done
-            
-            if [ "$file_success" = false ]; then
-                echo "  ✗ FALLÓ después de $max_retries intentos: $url"
-                echo "$url" >> "$FAILED_FILES"
-                failed=$((failed + 1))
-            fi
-            
-            # Mostrar progreso cada 5 archivos
-            if [ $((current % 5)) -eq 0 ]; then
-                echo ""
-                echo "=== PROGRESO: $current/$total_files ($(($current * 100 / $total_files))%) ==="
-                echo "Exitosos: $success | Fallidos: $failed"
-                echo "Espacio usado: $(du -sh $FILES_DIR | cut -f1)"
-            fi
-            
-        done < "$FILES_LIST"
-        
-        echo ""
-        echo "=== RESUMEN FINAL DE ARCHIVOS ==="
-        echo "Total procesados: $current"
-        echo "Exitosos: $success"
-        echo "Fallidos: $failed"
-        echo "Tasa de éxito: $(($success * 100 / $current))%"
-        echo "Espacio total usado: $(du -sh $FILES_DIR | cut -f1)"
-        
-        if [ -f "$FAILED_FILES" ]; then
-            echo ""
-            echo "Archivos que fallaron:"
-            cat "$FAILED_FILES"
-        fi
+          # 4) Use the helper repo's download-all.sh if present (it fetches images, pyPI, yum/deb repos)
+          if [ -f kubespray-offline/download-all.sh ]; then
+            echo "Using kubespray-offline/download-all.sh to fetch artifacts (recommended path)..."
+            pushd kubespray-offline
+            # make a minimal config edit so scripts target the requested versions
+            sed -i "s/^KUBESPRAY_VERSION=.*$/KUBESPRAY_VERSION=${K8S_VERSION:-${K8S_VERSION}}/g" config.sh || true || true
+            ./download-all.sh || { echo "download-all.sh failed — script will attempt fallback"; popd; }
+            popd || true
+          fi
 
-    - name: Create bundle metadata
-      run: |
-        echo "Creando metadata del bundle..."
-        
-        # Crear archivo de información del bundle
-        cat > airgapped-bundle/bundle-info.json << EOF
-        {
-          "bundle_name": "${{ github.event.inputs.bundle_name }}",
-          "created_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-          "versions": {
-            "kubespray": "${{ github.event.inputs.kubespray_version }}",
-            "kubernetes": "${{ github.event.inputs.kubernetes_version }}",
-            "containerd": "${{ github.event.inputs.containerd_version }}",
-            "calico": "${{ github.event.inputs.calico_version }}"
-          },
-          "target": {
-            "os": "CentOS 9 / RHEL 9",
-            "architecture": "amd64"
-          },
-          "statistics": {
-            "total_images": $(find airgapped-bundle/images/container-images -name "*.tar" | wc -l),
-            "total_files": $(find airgapped-bundle/files/binaries -type f | wc -l),
-            "images_size": "$(du -sh airgapped-bundle/images | cut -f1)",
-            "files_size": "$(du -sh airgapped-bundle/files | cut -f1)",
-            "total_size": "$(du -sh airgapped-bundle | cut -f1)"
-          }
-        }
-        EOF
-        
-        # Crear README básico
-        cat > airgapped-bundle/README.md << 'EOF'
-        # Kubespray Air-Gapped Bundle para CentOS 9 / AMD64
-        
-        Este bundle contiene todos los recursos necesarios (imágenes Docker y binarios) para desplegar Kubernetes usando Kubespray en un entorno air-gapped.
-        
-        ## Contenido
-        
-        - `images/` - Imágenes Docker en formato .tar
-        - `files/` - Binarios de Kubernetes y herramientas
-        - `kubespray-source/` - Código fuente de Kubespray
-        - `images.list` - Lista de imágenes incluidas
-        - `files.list` - Lista de archivos incluidos
-        - `bundle-info.json` - Información del bundle
-        
-        ## Uso Básico
-        
-        1. **Configurar registro Docker privado**:
-           ```bash
-           # Cargar imagen del registro
-           docker load -i images/container-images/registry_2.tar
-           
-           # Ejecutar registro
-           docker run -d -p 5000:5000 --name registry registry:2
-           ```
-        
-        2. **Cargar imágenes al registro**:
-           ```bash
-           for img in images/container-images/*.tar; do
-               docker load -i "$img"
-               # Etiquetar y subir al registro local
-           done
-           ```
-        
-        3. **Configurar servidor HTTP para archivos**:
-           ```bash
-           # Servir archivos con nginx
-           docker run -d -p 8080:80 -v $(pwd)/files/binaries:/usr/share/nginx/html nginx
-           ```
-        
-        4. **Configurar kubespray**:
-           - Copiar `kubespray-source/` a directorio de trabajo
-           - Configurar inventario para usar registro y servidor local
-           - Ejecutar playbook de kubespray
-        
-        ## Información del Bundle
-        
-        EOF
-        
-        # Agregar información del JSON al README
-        python3 -c "
-        import json
-        with open('airgapped-bundle/bundle-info.json', 'r') as f:
-            data = json.load(f)
-            
-        print(f\"- Kubespray: {data['versions']['kubespray']}\")
-        print(f\"- Kubernetes: {data['versions']['kubernetes']}\")
-        print(f\"- Containerd: {data['versions']['containerd']}\")
-        print(f\"- Calico: {data['versions']['calico']}\")
-        print(f\"- Imágenes incluidas: {data['statistics']['total_images']}\")
-        print(f\"- Archivos incluidos: {data['statistics']['total_files']}\")
-        print(f\"- Tamaño total: {data['statistics']['total_size']}\")
-        " >> airgapped-bundle/README.md
+          # 5) Fallback: gather images using kubespray's images list roles (best-effort)
+          echo "Gathering image list from Kubespray (best-effort)..."
+          python3 - <<PY
+          import yaml,sys,os,re,subprocess
+          base='${KUBE_DIR}'
+          images=set()
+          # look for yaml files that define images under roles or contrib
+          for root,dirs,files in os.walk(base):
+              for f in files:
+                  if f.endswith(('.yml','.yaml')):
+                      p=os.path.join(root,f)
+                      try:
+                          txt=open(p,'r',errors='ignore').read()
+                          # rough regex for "image:" or "repository:tag"
+                          for m in re.findall(r'([A-Za-z0-9./:-_]+/(?:[^\\s\'"]+):[0-9a-zA-Z._-]+)', txt):
+                              images.add(m)
+                      except Exception:
+                          pass
+          # add obvious Kubespray images for kubeadm/kubelet etc
+          images.update([
+            "k8s.gcr.io/kube-apiserver:${}".format('${K8S_VERSION}')
+          ])
+          out = sorted(images)
+          print("\n".join(out))
+          PY > outputs/images-to-pull.txt || true
 
-    - name: Create compressed bundle
-      run: |
-        echo "=== CREANDO BUNDLE COMPRIMIDO ==="
-        
-        # Mostrar estadísticas finales
-        echo "Estadísticas del bundle:"
-        echo "- Imágenes: $(find airgapped-bundle/images/container-images -name "*.tar" | wc -l)"
-        echo "- Archivos: $(find airgapped-bundle/files/binaries -type f | wc -l)"
-        echo "- Tamaño imágenes: $(du -sh airgapped-bundle/images | cut -f1)"
-        echo "- Tamaño archivos: $(du -sh airgapped-bundle/files | cut -f1)"
-        echo "- Tamaño total: $(du -sh airgapped-bundle | cut -f1)"
-        
-        # Crear tarball comprimido
-        echo "Comprimiendo bundle..."
-        tar -czf ${{ github.event.inputs.bundle_name }}.tar.gz airgapped-bundle/
-        
-        # Mostrar información final
-        echo ""
-        echo "=== BUNDLE CREADO EXITOSAMENTE ==="
-        echo "Archivo: ${{ github.event.inputs.bundle_name }}.tar.gz"
-        echo "Tamaño comprimido: $(du -sh ${{ github.event.inputs.bundle_name }}.tar.gz | cut -f1)"
-        
-        # Crear checksum
-        sha256sum ${{ github.event.inputs.bundle_name }}.tar.gz > ${{ github.event.inputs.bundle_name }}.tar.gz.sha256
-        
-        echo "Checksum SHA256:"
-        cat ${{ github.event.inputs.bundle_name }}.tar.gz.sha256
+          # 6) Pull and save images (podman)
+          echo "Pulling images list (first 200 lines):"
+          head -n 200 outputs/images-to-pull.txt || true
+          while read -r img; do
+            [ -z "$img" ] && continue
+            echo "Pull: $img"
+            podman pull --tls-verify=false "$img" || podman pull "$img" || echo "WARN: failed to pull $img"
+            podman save -o outputs/images/"$(echo $img | tr '/:' '_').tar" "$img" || echo "WARN: save failed for $img"
+          done < outputs/images-to-pull.txt || true
 
-    - name: Upload bundle as artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: ${{ github.event.inputs.bundle_name }}
-        path: |
-          ${{ github.event.inputs.bundle_name }}.tar.gz
-          ${{ github.event.inputs.bundle_name }}.tar.gz.sha256
-        retention-days: 30
+          # 7) Download kube binaries for the requested Kubernetes version
+          K8S="${K8S_VERSION}"
+          KD="outputs/binaries"
+          mkdir -p $KD
+          echo "Downloading kubeadm, kubelet, kubectl for v${K8S}..."
+          baseurl="https://storage.googleapis.com/kubernetes-release/release/v${K8S}/bin/linux/amd64"
+          for b in kubeadm kubelet kubectl; do
+            url="${baseurl}/${b}"
+            echo "GET $url"
+            curl -sSL --retry 5 -o "${KD}/${b}-v${K8S}" "$url" || echo "WARN: cannot download $b"
+            chmod +x "${KD}/${b}-v${K8S}" || true
+          done
 
-    - name: Create release (optional)
-      if: github.ref == 'refs/heads/main'
-      uses: softprops/action-gh-release@v2
-      with:
-        tag_name: ${{ github.event.inputs.bundle_name }}-${{ github.run_number }}
-        name: Kubespray Air-Gapped Bundle - ${{ github.event.inputs.bundle_name }}
-        body: |
-          # Kubespray Air-Gapped Bundle
-          
-          **Versiones incluidas:**
-          - Kubespray: ${{ github.event.inputs.kubespray_version }}
-          - Kubernetes: ${{ github.event.inputs.kubernetes_version }}
-          - Containerd: ${{ github.event.inputs.containerd_version }}
-          - Calico: ${{ github.event.inputs.calico_version }}
-          
-          **Target:** CentOS 9 / RHEL 9 (AMD64)
-          
-          **Contenido:**
-          - Imágenes Docker necesarias para Kubernetes
-          - Binarios de Kubernetes y herramientas
-          - Código fuente de Kubespray configurado
-          
-          **Uso:**
-          1. Descargar el archivo .tar.gz
-          2. Extraer en el entorno air-gapped
-          3. Configurar registro Docker y servidor HTTP
-          4. Cargar imágenes y archivos
-          5. Ejecutar kubespray
-          
-          **Verificación:**
-          ```bash
-          sha256sum -c ${{ github.event.inputs.bundle_name }}.tar.gz.sha256
-          ```
-        files: |
-          ${{ github.event.inputs.bundle_name }}.tar.gz
-          ${{ github.event.inputs.bundle_name }}.tar.gz.sha256
-        draft: false
-        prerelease: false
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # 8) Optionally tar everything into a single artifact
+          artifact="${ARTIFACT_NAME:-kubespray-offline-artifact.tar.gz}"
+          echo "Packaging artifact ${artifact}..."
+          tar -C outputs -czf "../${artifact}" outputs || true
+          echo "DONE: artifact at ../${artifact}"
+          BASH
+          chmod +x offline-output/generate-offline.sh
+
+      - name: Run offline generator (this produces the tar.gz artifact)
+        run: |
+          pushd offline-output
+          ./generate-offline.sh
+          popd
+          ls -lh offline-output || true
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ github.event.inputs.artifact_name }}
+          path: offline-output/${{ github.event.inputs.artifact_name }}
