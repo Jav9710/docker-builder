@@ -10,11 +10,11 @@ on:
       kubernetes_version:
         description: 'Kubernetes version to prepare'
         required: true
-        default: '1.31.9'
+        default: 'v1.28.5'
       cni:
         description: 'CNI to include (calico|cilium|flannel|weave|kube-ovn|kube-router|multus)'
         required: true
-        default: 'cilium'
+        default: 'calico'
       target_os:
         description: 'Target node OS'
         required: true
@@ -22,185 +22,156 @@ on:
       artifact_name:
         description: 'Artifact name to produce'
         required: false
-        default: 'kubespray-offline-artifact.tar.gz'
+        default: 'kubespray-offline-bundle.tar.gz'
 
 env:
-  # Default versions that would normally match the kubespray_version
-  ETCD_VERSION: '3.5.21'
-  DOCKER_VERSION: '26.1'
-  CONTAINERD_VERSION: '1.7.27'
-  CRIO_VERSION: '1.31.6'
-  CNI_PLUGINS_VERSION: '1.4.1'
-  CALICO_VERSION: '3.29.4'
-  CILIUM_VERSION: '1.15.9'
+  # Container Runtimes
+  CONTAINERD_VERSION: '1.7.11'
+  CRIO_VERSION: '1.28.2'
+  DOCKER_VERSION: '24.0.7'
+
+  # Core Components
+  ETCD_VERSION: '3.5.10'
+  CNI_PLUGINS_VERSION: '1.3.0'
+  COREDNS_VERSION: '1.11.1'
+  HELM_VERSION: '3.14.1'
+
+  # CNI Versions
+  CALICO_VERSION: '3.26.1'
+  CILIUM_VERSION: '1.14.5'
   FLANNEL_VERSION: '0.22.0'
-  KUBE_OVN_VERSION: '1.12.21'
-  KUBE_ROUTER_VERSION: '2.0.0'
-  MULTUS_VERSION: '3.8'
-  WEAVE_VERSION: '2.8.7'
-  KUBE_VIP_VERSION: '0.8.0'
-  CERT_MANAGER_VERSION: '1.15.3'
-  COREDNS_VERSION: '1.11.3'
-  INGRESS_NGINX_VERSION: '1.12.1'
-  KREW_VERSION: '0.4.4'
-  ARGOCD_VERSION: '2.11.0'
-  HELM_VERSION: '3.16.4'
-  METALLB_VERSION: '0.13.9'
-  REGISTRY_VERSION: '2.8.1'
-  CEPHFS_PROVISIONER_VERSION: '2.1.0-k8s1.11'
-  RBD_PROVISIONER_VERSION: '2.1.1-k8s1.11'
-  AWS_EBS_CSI_PLUGIN_VERSION: '0.5.0'
-  AZURE_CSI_PLUGIN_VERSION: '1.10.0'
-  CINDER_CSI_PLUGIN_VERSION: '1.30.0'
-  GCP_PD_CSI_PLUGIN_VERSION: '1.9.2'
-  LOCAL_PATH_PROVISIONER_VERSION: '0.0.24'
-  LOCAL_VOLUME_PROVISIONER_VERSION: '2.5.0'
-  NODE_FEATURE_DISCOVERY_VERSION: '0.16.4'
+  KUBE_OVN_VERSION: '1.12.0'
+  WEAVE_VERSION: '2.8.1'
 
 jobs:
-  build-offline:
-    runs-on: ubuntu-latest
+  build-offline-bundle:
+    runs-on: ubuntu-22.04
     permissions:
       contents: read
       id-token: write
+
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Python (for running helper scripts)
+      - name: Setup Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.11'
 
-      - name: Install prerequisites
+      - name: Install dependencies
         run: |
-          sudo apt-get update -y
-          sudo apt-get install -y jq curl tar gzip ca-certificates git podman
+          sudo apt-get update
+          sudo apt-get install -y \
+            jq \
+            curl \
+            tar \
+            gzip \
+            git \
+            podman \
+            python3-venv
 
-      - name: Fetch Kubespray (requested tag)
+      - name: Clone Kubespray
         env:
-          TAG: ${{ github.event.inputs.kubespray_version }}
+          KUBESPRAY_VERSION: ${{ inputs.kubespray_version }}
         run: |
           set -e
           rm -rf kubespray
-          git clone --depth 1 --branch "${TAG}" https://github.com/kubernetes-sigs/kubespray.git kubespray
-          echo "KUBESPRAY_DIR=$(pwd)/kubespray" > $GITHUB_ENV
+          git clone --depth 1 --branch "${KUBESPRAY_VERSION}" \
+            https://github.com/kubernetes-sigs/kubespray.git kubespray
+          echo "KUBESPRAY_DIR=$(pwd)/kubespray" >> $GITHUB_ENV
 
-      - name: Create config for offline generation
+      - name: Create configuration
         run: |
-          mkdir -p offline-output
-          cat > offline-output/config.env <<EOF
+          mkdir -p offline-bundle
+          cat > offline-bundle/config.env <<EOF
           KUBESPRAY_DIR=${{ env.KUBESPRAY_DIR }}
-          K8S_VERSION=${{ github.event.inputs.kubernetes_version }}
-          CNI=${{ github.event.inputs.cni }}
-          ETCD_VERSION=${{ env.ETCD_VERSION }}
+          KUBERNETES_VERSION=${{ inputs.kubernetes_version }}
+          CNI=${{ inputs.cni }}
+          TARGET_OS=${{ inputs.target_os }}
+          ARTIFACT_NAME=${{ inputs.artifact_name }}
+          # Container Runtimes
           CONTAINERD_VERSION=${{ env.CONTAINERD_VERSION }}
-          TARGET_OS=${{ github.event.inputs.target_os }}
-          ARTIFACT_NAME=${{ github.event.inputs.artifact_name }}
+          CRIO_VERSION=${{ env.CRIO_VERSION }}
+          # Core Components
+          ETCD_VERSION=${{ env.ETCD_VERSION }}
+          CNI_PLUGINS_VERSION=${{ env.CNI_PLUGINS_VERSION }}
+          # CNI Versions
+          CALICO_VERSION=${{ env.CALICO_VERSION }}
+          CILIUM_VERSION=${{ env.CILIUM_VERSION }}
           EOF
-          ls -la offline-output && cat offline-output/config.env
 
-      - name: Add offline-download helper script
+      - name: Generate download script
         run: |
-          cat > offline-output/generate-offline.sh <<'BASH'
+          cat > offline-bundle/download.sh <<'SCRIPT'
           #!/usr/bin/env bash
           set -euo pipefail
-          cd "$(dirname "$0")"
+
+          # Load configuration
           source ./config.env
 
-          # 1) prepare work dirs
-          mkdir -p outputs/images outputs/binaries outputs/pypi outputs/os-pkgs
-
-          # 2) get kubespray (already cloned)
-          KUBE_DIR="${KUBESPRAY_DIR}"
-          echo "Using Kubespray at ${KUBE_DIR}"
-
-          # 3) Resolve container image list from Kubespray roles (simple approach):
-          #    - Use the roles/download/defaults or group_vars to build images list
-          #    - For robustness we fall back to using a community generator (kubespray-offline)
-          #
-          # Try to use kubespray-offline if available (recommended); otherwise use a basic image gatherer.
-          if [ ! -d "kubespray-offline" ]; then
-            echo "Cloning kubespray-offline helper..."
-            git clone --depth 1 https://github.com/kubespray-offline/kubespray-offline.git || true
+          # Set default artifact name if not provided
+          if [ -z "${ARTIFACT_NAME}" ]; then
+            ARTIFACT_NAME="kubespray-offline-bundle.tar.gz"
           fi
 
-          # 4) Use the helper repo's download-all.sh if present (it fetches images, pyPI, yum/deb repos)
-          if [ -f kubespray-offline/download-all.sh ]; then
-            echo "Using kubespray-offline/download-all.sh to fetch artifacts (recommended path)..."
-            pushd kubespray-offline
-            # make a minimal config edit so scripts target the requested versions
-            sed -i "s/^KUBESPRAY_VERSION=.*$/KUBESPRAY_VERSION=${K8S_VERSION:-${K8S_VERSION}}/g" config.sh || true || true
-            ./download-all.sh || { echo "download-all.sh failed — script will attempt fallback"; popd; }
-            popd || true
-          fi
+          # Create directory structure
+          mkdir -p \
+            artifacts/images \
+            artifacts/binaries \
+            artifacts/packages \
+            artifacts/pip
 
-          # 5) Fallback: gather images using kubespray's images list roles (best-effort)
-          echo "Gathering image list from Kubespray (best-effort)..."
-          python3 - <<PY
-          import yaml,sys,os,re,subprocess
-          base='${KUBE_DIR}'
-          images=set()
-          # look for yaml files that define images under roles or contrib
-          for root,dirs,files in os.walk(base):
-              for f in files:
-                  if f.endswith(('.yml','.yaml')):
-                      p=os.path.join(root,f)
-                      try:
-                          txt=open(p,'r',errors='ignore').read()
-                          # rough regex for "image:" or "repository:tag"
-                          for m in re.findall(r'([A-Za-z0-9./:-_]+/(?:[^\\s\'"]+):[0-9a-zA-Z._-]+)', txt):
-                              images.add(m)
-                      except Exception:
-                          pass
-          # add obvious Kubespray images for kubeadm/kubelet etc
-          images.update([
-            "k8s.gcr.io/kube-apiserver:${}".format('${K8S_VERSION}')
-          ])
-          out = sorted(images)
-          print("\n".join(out))
-          PY > outputs/images-to-pull.txt || true
+          # Download Kubernetes binaries
+          echo "Downloading Kubernetes binaries..."
+          K8S_BINARIES=(
+            "kubeadm"
+            "kubelet"
+            "kubectl"
+          )
 
-          # 6) Pull and save images (podman)
-          echo "Pulling images list (first 200 lines):"
-          head -n 200 outputs/images-to-pull.txt || true
-          while read -r img; do
-            [ -z "$img" ] && continue
-            echo "Pull: $img"
-            podman pull --tls-verify=false "$img" || podman pull "$img" || echo "WARN: failed to pull $img"
-            podman save -o outputs/images/"$(echo $img | tr '/:' '_').tar" "$img" || echo "WARN: save failed for $img"
-          done < outputs/images-to-pull.txt || true
-
-          # 7) Download kube binaries for the requested Kubernetes version
-          K8S="${K8S_VERSION}"
-          KD="outputs/binaries"
-          mkdir -p $KD
-          echo "Downloading kubeadm, kubelet, kubectl for v${K8S}..."
-          baseurl="https://storage.googleapis.com/kubernetes-release/release/v${K8S}/bin/linux/amd64"
-          for b in kubeadm kubelet kubectl; do
-            url="${baseurl}/${b}"
-            echo "GET $url"
-            curl -sSL --retry 5 -o "${KD}/${b}-v${K8S}" "$url" || echo "WARN: cannot download $b"
-            chmod +x "${KD}/${b}-v${K8S}" || true
+          for binary in "${K8S_BINARIES[@]}"; do
+            echo "Downloading ${binary}..."
+            curl -L --retry 5 --output "artifacts/binaries/${binary}" \
+              "https://dl.k8s.io/release/${KUBERNETES_VERSION}/bin/linux/amd64/${binary}" || \
+              { echo "Failed to download ${binary}"; exit 1; }
+            chmod +x "artifacts/binaries/${binary}"
           done
 
-          # 8) Optionally tar everything into a single artifact
-          artifact="${ARTIFACT_NAME:-kubespray-offline-artifact.tar.gz}"
-          echo "Packaging artifact ${artifact}..."
-          tar -C outputs -czf "../${artifact}" outputs || true
-          echo "DONE: artifact at ../${artifact}"
-          BASH
-          chmod +x offline-output/generate-offline.sh
+          # Download container images
+          echo "Downloading container images..."
+          IMAGES=(
+            "k8s.gcr.io/kube-apiserver:${KUBERNETES_VERSION}"
+            "k8s.gcr.io/kube-controller-manager:${KUBERNETES_VERSION}"
+            "k8s.gcr.io/kube-scheduler:${KUBERNETES_VERSION}"
+            "k8s.gcr.io/kube-proxy:${KUBERNETES_VERSION}"
+            "k8s.gcr.io/pause:3.9"
+          )
 
-      - name: Run offline generator (this produces the tar.gz artifact)
+          for image in "${IMAGES[@]}"; do
+            echo "Pulling ${image}..."
+            podman pull "${image}" || { echo "Failed to pull ${image}"; exit 1; }
+            podman save -o "artifacts/images/$(echo ${image} | tr '/:' '_').tar" "${image}" || \
+              { echo "Failed to save ${image}"; exit 1; }
+          done
+
+          # Create final bundle
+          echo "Creating bundle archive ${ARTIFACT_NAME}..."
+          tar -czvf "../${ARTIFACT_NAME}" artifacts || \
+            { echo "Failed to create bundle archive"; exit 1; }
+          
+          echo "Successfully created bundle: ../${ARTIFACT_NAME}"
+          SCRIPT
+
+          chmod +x offline-bundle/download.sh
+
+      - name: Execute download script
         run: |
-          pushd offline-output
-          ./generate-offline.sh
-          popd
-          ls -lh offline-output || true
+          cd offline-bundle
+          ./download.sh
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ github.event.inputs.artifact_name }}
-          path: offline-output/${{ github.event.inputs.artifact_name }}
+          name: ${{ inputs.artifact_name }}
+          path: offline-bundle/${{ inputs.artifact_name }}
