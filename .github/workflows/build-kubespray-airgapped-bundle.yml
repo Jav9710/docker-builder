@@ -155,12 +155,12 @@ jobs:
               { echo "Failed to save ${image}"; exit 1; }
           done
 
-          # Create final bundle
+          # Create final bundle (in the same directory)
           echo "Creating bundle archive ${ARTIFACT_NAME}..."
-          tar -czvf "../${ARTIFACT_NAME}" artifacts || \
+          tar -czvf "${ARTIFACT_NAME}" artifacts || \
             { echo "Failed to create bundle archive"; exit 1; }
           
-          echo "Successfully created bundle: ../${ARTIFACT_NAME}"
+          echo "Successfully created bundle: ${ARTIFACT_NAME}"
           SCRIPT
 
           chmod +x offline-bundle/download.sh
@@ -169,6 +169,7 @@ jobs:
         run: |
           cd offline-bundle
           ./download.sh
+          ls -lh # Debug: Show created files
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
