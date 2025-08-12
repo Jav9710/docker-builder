@@ -6,7 +6,7 @@ on:
       kubespray_version:
         description: 'Kubespray release/tag to use'
         required: true
-        default: 'v2.27.0'   # o la versión que uses como base de Kubespray
+        default: 'v2.27.0'
       kubernetes_version:
         description: 'Kubernetes version to prepare'
         required: true
@@ -14,102 +14,7 @@ on:
       cni:
         description: 'CNI to include (calico|cilium|flannel|weave|kube-ovn|kube-router|multus)'
         required: true
-        default: 'calico'
-      etcd_version:
-        description: 'etcd version'
-        required: false
-        default: '3.5.21'
-      docker_version:
-        description: 'Docker Engine version'
-        required: false
-        default: '26.1'
-      containerd_version:
-        description: 'containerd version'
-        required: false
-        default: '1.7.27'
-      crio_version:
-        description: 'CRI-O version'
-        required: false
-        default: '1.31.6'
-      cni_plugins_version:
-        description: 'CNI plugins version'
-        required: false
-        default: '1.4.1'
-      calico_version:
-        required: false
-        default: '3.29.4'
-      cilium_version:
-        required: false
-        default: '1.15.9'
-      flannel_version:
-        required: false
-        default: '0.22.0'
-      kube_ovn_version:
-        required: false
-        default: '1.12.21'
-      kube_router_version:
-        required: false
-        default: '2.0.0'
-      multus_version:
-        required: false
-        default: '3.8'
-      weave_version:
-        required: false
-        default: '2.8.7'
-      kube_vip_version:
-        required: false
-        default: '0.8.0'
-      cert_manager_version:
-        required: false
-        default: '1.15.3'
-      coredns_version:
-        required: false
-        default: '1.11.3'
-      ingress_nginx_version:
-        required: false
-        default: '1.12.1'
-      krew_version:
-        required: false
-        default: '0.4.4'
-      argocd_version:
-        required: false
-        default: '2.11.0'
-      helm_version:
-        required: false
-        default: '3.16.4'
-      metallb_version:
-        required: false
-        default: '0.13.9'
-      registry_version:
-        required: false
-        default: '2.8.1'
-      cephfs_provisioner_version:
-        required: false
-        default: '2.1.0-k8s1.11'
-      rbd_provisioner_version:
-        required: false
-        default: '2.1.1-k8s1.11'
-      aws_ebs_csi_plugin_version:
-        required: false
-        default: '0.5.0'
-      azure_csi_plugin_version:
-        required: false
-        default: '1.10.0'
-      cinder_csi_plugin_version:
-        required: false
-        default: '1.30.0'
-      gcp_pd_csi_plugin_version:
-        required: false
-        default: '1.9.2'
-      local_path_provisioner_version:
-        required: false
-        default: '0.0.24'
-      local_volume_provisioner_version:
-        required: false
-        default: '2.5.0'
-      node_feature_discovery_version:
-        required: false
-        default: '0.16.4'
+        default: 'cilium'
       target_os:
         description: 'Target node OS'
         required: true
@@ -118,6 +23,39 @@ on:
         description: 'Artifact name to produce'
         required: false
         default: 'kubespray-offline-artifact.tar.gz'
+
+env:
+  # Default versions that would normally match the kubespray_version
+  ETCD_VERSION: '3.5.21'
+  DOCKER_VERSION: '26.1'
+  CONTAINERD_VERSION: '1.7.27'
+  CRIO_VERSION: '1.31.6'
+  CNI_PLUGINS_VERSION: '1.4.1'
+  CALICO_VERSION: '3.29.4'
+  CILIUM_VERSION: '1.15.9'
+  FLANNEL_VERSION: '0.22.0'
+  KUBE_OVN_VERSION: '1.12.21'
+  KUBE_ROUTER_VERSION: '2.0.0'
+  MULTUS_VERSION: '3.8'
+  WEAVE_VERSION: '2.8.7'
+  KUBE_VIP_VERSION: '0.8.0'
+  CERT_MANAGER_VERSION: '1.15.3'
+  COREDNS_VERSION: '1.11.3'
+  INGRESS_NGINX_VERSION: '1.12.1'
+  KREW_VERSION: '0.4.4'
+  ARGOCD_VERSION: '2.11.0'
+  HELM_VERSION: '3.16.4'
+  METALLB_VERSION: '0.13.9'
+  REGISTRY_VERSION: '2.8.1'
+  CEPHFS_PROVISIONER_VERSION: '2.1.0-k8s1.11'
+  RBD_PROVISIONER_VERSION: '2.1.1-k8s1.11'
+  AWS_EBS_CSI_PLUGIN_VERSION: '0.5.0'
+  AZURE_CSI_PLUGIN_VERSION: '1.10.0'
+  CINDER_CSI_PLUGIN_VERSION: '1.30.0'
+  GCP_PD_CSI_PLUGIN_VERSION: '1.9.2'
+  LOCAL_PATH_PROVISIONER_VERSION: '0.0.24'
+  LOCAL_VOLUME_PROVISIONER_VERSION: '2.5.0'
+  NODE_FEATURE_DISCOVERY_VERSION: '0.16.4'
 
 jobs:
   build-offline:
@@ -155,10 +93,9 @@ jobs:
           KUBESPRAY_DIR=${{ env.KUBESPRAY_DIR }}
           K8S_VERSION=${{ github.event.inputs.kubernetes_version }}
           CNI=${{ github.event.inputs.cni }}
-          ETCD_VERSION=${{ github.event.inputs.etcd_version }}
-          CONTAINERD_VERSION=${{ github.event.inputs.containerd_version }}
+          ETCD_VERSION=${{ env.ETCD_VERSION }}
+          CONTAINERD_VERSION=${{ env.CONTAINERD_VERSION }}
           TARGET_OS=${{ github.event.inputs.target_os }}
-          EXTRA_IMAGES='${{ github.event.inputs.download_extra_images }}'
           ARTIFACT_NAME=${{ github.event.inputs.artifact_name }}
           EOF
           ls -la offline-output && cat offline-output/config.env
