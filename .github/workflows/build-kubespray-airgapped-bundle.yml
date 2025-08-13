@@ -61,7 +61,7 @@ jobs:
       - name: Compress output
         run: |
           cd kubespray-offline
-          tar -czvf kubespray-offline-packages.tar.gz output/
+          tar -czvf kubespray-offline-packages.tar.gz outputs/
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
