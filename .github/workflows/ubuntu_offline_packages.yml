@@ -54,13 +54,30 @@ jobs:
         # Actualizar cache sin upgrade para mantener consistencia
         sudo apt update
         
-        # Mostrar información de repositorios para debugging
+        # Mostrar información de repositorios para debugging de manera robusta
         echo "Repositorios activos:"
-        grep "^deb " /etc/apt/sources.list
+        echo "--- sources.list principal ---"
+        if [ -f /etc/apt/sources.list ] && [ -s /etc/apt/sources.list ]; then
+            grep "^deb " /etc/apt/sources.list || echo "No hay entradas 'deb' en sources.list principal"
+        else
+            echo "sources.list está vacío o no existe"
+        fi
         
-        # Verificar que tenemos acceso a los paquetes críticos
+        echo "--- sources.list.d adicionales ---"
+        if [ -d /etc/apt/sources.list.d ]; then
+            find /etc/apt/sources.list.d -name "*.list" -exec grep -l "^deb " {} \; | head -5 || echo "No hay archivos .list adicionales con entradas deb"
+        fi
+        
+        # Verificar que tenemos acceso a los paquetes críticos de manera robusta
         echo "Verificando disponibilidad de paquetes críticos..."
-        apt-cache policy conntrack-tools python3 containerd.io curl
+        for package in conntrack-tools python3 curl openssh-server; do
+            echo "Verificando $package..."
+            if apt-cache policy "$package" >/dev/null 2>&1; then
+                echo "  ✓ $package disponible"
+            else
+                echo "  ⚠ $package no encontrado en repositorios"
+            fi
+        done
 
     - name: Definir paquetes esenciales para Kubernetes
       run: |
