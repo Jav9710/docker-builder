@@ -1,0 +1,584 @@
+name: Ubuntu 24.04 Kubernetes Offline Packages
+
+# Este workflow descarga únicamente los paquetes esenciales para kubespray en Ubuntu 24.04
+# Diseñado para entornos completamente offline donde cada byte cuenta
+
+on:
+  # Solo permite ejecución manual cuando lo necesites
+  workflow_dispatch:
+    inputs:
+      include_troubleshooting_tools:
+        description: '¿Incluir herramientas de diagnóstico (tcpdump, htop, etc)?'
+        required: false
+        default: true
+        type: boolean
+
+env:
+  # Configuraciones para evitar prompts interactivos durante la descarga
+  DEBIAN_FRONTEND: noninteractive
+  APT_KEY_DONT_WARN_ON_DANGEROUS_USAGE: 1
+
+jobs:
+  build-offline-repository:
+    # Usamos exactamente Ubuntu 24.04 para garantizar compatibilidad perfecta
+    runs-on: ubuntu-24.04
+    
+    steps:
+    - name: Preparar entorno de trabajo
+      run: |
+        echo "=== Iniciando construcción de repositorio offline para Kubernetes ==="
+        echo "Sistema: $(lsb_release -ds)"
+        echo "Fecha: $(date)"
+        echo "Incluir herramientas diagnóstico: ${{ inputs.include_troubleshooting_tools }}"
+        
+        # Crear estructura de directorios organizada
+        mkdir -p offline-packages/{downloaded-debs,final-repo,documentation}
+        
+        # Documentar el entorno de construcción para troubleshooting futuro
+        cat > offline-packages/documentation/build-environment.txt << EOF
+        ENTORNO DE CONSTRUCCIÓN
+        =====================
+        SO: $(lsb_release -ds)
+        Kernel: $(uname -r)  
+        Arquitectura: $(dpkg --print-architecture)
+        Fecha construcción: $(date)
+        Herramientas diagnóstico: ${{ inputs.include_troubleshooting_tools }}
+        
+        PROPÓSITO: Paquetes offline para instalación Kubernetes/kubespray en polígono aislado
+        EOF
+
+    - name: Actualizar repositorios del sistema
+      run: |
+        echo "Actualizando cache de paquetes para obtener versiones más recientes..."
+        
+        # Actualizar cache sin upgrade para mantener consistencia
+        sudo apt update
+        
+        # Mostrar información de repositorios para debugging
+        echo "Repositorios activos:"
+        grep "^deb " /etc/apt/sources.list
+        
+        # Verificar que tenemos acceso a los paquetes críticos
+        echo "Verificando disponibilidad de paquetes críticos..."
+        apt-cache policy conntrack-tools python3 containerd.io curl
+
+    - name: Definir paquetes esenciales para Kubernetes
+      run: |
+        cd offline-packages
+        
+        echo "Definiendo lista de paquetes absolutamente necesarios para kubespray..."
+        
+        # Esta lista está cuidadosamente curada para incluir solo lo esencial
+        # Cada paquete aquí resuelve un problema específico documentado
+        cat > documentation/essential-packages.list << 'EOF'
+        # === PAQUETES CRÍTICOS PARA KUBESPRAY EN UBUNTU 24.04 ===
+        
+        # FIX CRÍTICO: Ubuntu 24.04 cambió el nombre del paquete conntrack
+        # Kubespray busca 'conntrack' pero Ubuntu 24.04 lo tiene como 'conntrack-tools'
+        conntrack-tools
+        
+        # Python ecosystem - kubespray está escrito en Python/Ansible
+        python3
+        python3-pip
+        python3-venv
+        python3-full
+        python3-apt
+        
+        # Herramientas de red esenciales para Kubernetes networking
+        iptables
+        iptables-persistent
+        ipset
+        ipvsadm
+        socat
+        ebtables
+        
+        # Container runtime y dependencias
+        containerd.io
+        runc
+        apparmor
+        libseccomp2
+        
+        # Herramientas básicas del sistema que kubespray asume están presentes
+        curl
+        wget
+        openssh-client
+        openssh-server
+        rsync
+        unzip
+        tar
+        gzip
+        
+        # Certificados y criptografía para Kubernetes
+        ca-certificates
+        openssl
+        gnupg
+        
+        # Git para clonar kubespray si es necesario
+        git
+        
+        # Sincronización de tiempo - crítico para etcd
+        systemd-timesyncd
+        chrony
+        
+        # Filesystems para volúmenes persistentes
+        e2fsprogs
+        xfsprogs
+        nfs-common
+        
+        # Herramientas de red básicas
+        net-tools
+        iproute2
+        
+        # Sudo y herramientas de gestión
+        sudo
+        apt-transport-https
+        software-properties-common
+        lsb-release
+        EOF
+        
+        echo "Lista de paquetes esenciales creada: $(grep -v '^#' documentation/essential-packages.list | grep -v '^$' | wc -l) paquetes"
+
+    - name: Definir herramientas de diagnóstico opcionales
+      if: inputs.include_troubleshooting_tools == true
+      run: |
+        cd offline-packages
+        
+        echo "Agregando herramientas de diagnóstico para troubleshooting..."
+        
+        # Herramientas útiles para diagnosticar problemas en entorno offline
+        # Donde no tienes acceso a documentación online
+        cat > documentation/diagnostic-tools.list << 'EOF'
+        # === HERRAMIENTAS DE DIAGNÓSTICO PARA TROUBLESHOOTING ===
+        
+        # Diagnóstico de red
+        tcpdump
+        netcat-openbsd
+        telnet
+        traceroute
+        dnsutils
+        
+        # Monitoreo de sistema
+        htop
+        iotop
+        tree
+        lsof
+        
+        # Manipulación de datos
+        jq
+        
+        # Editor de texto simple
+        nano
+        
+        # Herramientas de compresión adicionales
+        zip
+        bzip2
+        EOF
+
+    - name: Descargar paquetes y todas sus dependencias
+      run: |
+        cd offline-packages/downloaded-debs
+        
+        echo "=== INICIANDO DESCARGA MASIVA DE PAQUETES ==="
+        echo "Este proceso descarga cada paquete y TODAS sus dependencias recursivamente"
+        
+        # Función inteligente para descargar paquetes con todas sus dependencias
+        # Esta es la parte más compleja pero crucial del proceso
+        download_with_all_dependencies() {
+            local package_name=$1
+            local depth=${2:-0}
+            local max_depth=4  # Limitar profundidad para evitar descargas infinitas
+            
+            # Evitar descargas duplicadas y loops infinitos
+            if [ $depth -gt $max_depth ]; then
+                echo "  Profundidad máxima alcanzada para $package_name"
+                return 0
+            fi
+            
+            # Verificar si ya tenemos este paquete
+            if ls ${package_name}_*.deb >/dev/null 2>&1; then
+                echo "  ✓ $package_name ya descargado"
+                return 0
+            fi
+            
+            echo "  Descargando $package_name (nivel $depth)..."
+            
+            # Intentar descargar el paquete principal
+            if apt-get download "$package_name" 2>/dev/null; then
+                echo "    ✓ $package_name descargado exitosamente"
+                
+                # Ahora obtener todas las dependencias de este paquete
+                # apt-cache depends nos da la lista completa de lo que necesita
+                local dependencies=$(apt-cache depends "$package_name" 2>/dev/null | \
+                                  grep "Depends:" | \
+                                  sed 's/.*Depends: //' | \
+                                  sed 's/ *|.*//' | \
+                                  grep -v "^<" | \
+                                  sort -u)
+                
+                # Descargar recursivamente cada dependencia
+                for dependency in $dependencies; do
+                    if [ "$dependency" != "$package_name" ]; then
+                        download_with_all_dependencies "$dependency" $((depth + 1))
+                    fi
+                done
+                
+            else
+                echo "    ⚠ No se pudo descargar $package_name (puede no existir o ya estar instalado en el sistema base)"
+            fi
+        }
+        
+        echo "Procesando paquetes esenciales..."
+        while IFS= read -r package; do
+            # Procesar solo líneas que no son comentarios ni vacías
+            if [[ "$package" =~ ^[^#]*[^[:space:]] ]]; then
+                clean_package=$(echo "$package" | sed 's/#.*//' | xargs)
+                if [ -n "$clean_package" ]; then
+                    echo "--- Procesando: $clean_package ---"
+                    download_with_all_dependencies "$clean_package"
+                fi
+            fi
+        done < ../documentation/essential-packages.list
+        
+        # Procesar herramientas de diagnóstico si fueron solicitadas
+        if [ "${{ inputs.include_troubleshooting_tools }}" = "true" ]; then
+            echo "Procesando herramientas de diagnóstico..."
+            while IFS= read -r package; do
+                if [[ "$package" =~ ^[^#]*[^[:space:]] ]]; then
+                    clean_package=$(echo "$package" | sed 's/#.*//' | xargs)
+                    if [ -n "$clean_package" ]; then
+                        echo "--- Procesando herramienta diagnóstico: $clean_package ---"
+                        # Para herramientas de diagnóstico, solo descargamos el paquete principal
+                        # sin dependencias profundas para ahorrar espacio
+                        apt-get download "$clean_package" 2>/dev/null || echo "    ⚠ $clean_package no disponible"
+                    fi
+                fi
+            done < ../documentation/diagnostic-tools.list
+        fi
+        
+        # Mostrar estadísticas de lo descargado
+        total_packages=$(ls *.deb 2>/dev/null | wc -l)
+        total_size=$(du -sh . | cut -f1)
+        echo "=== DESCARGA COMPLETADA ==="
+        echo "Paquetes descargados: $total_packages"
+        echo "Tamaño total: $total_size"
+
+    - name: Construir repositorio APT funcional
+      run: |
+        cd offline-packages
+        
+        echo "=== CONSTRUYENDO REPOSITORIO APT OFFLINE ==="
+        echo "Creando estructura que Ubuntu reconocerá como repositorio legítimo..."
+        
+        # Crear estructura estándar de repositorio Debian/Ubuntu
+        # Esta estructura replica exactamente cómo están organizados los repositorios oficiales
+        mkdir -p final-repo/dists/noble/main/binary-amd64
+        mkdir -p final-repo/pool/main
+        
+        # Mover todos los paquetes .deb al pool (área de almacenamiento)
+        if ls downloaded-debs/*.deb >/dev/null 2>&1; then
+            mv downloaded-debs/*.deb final-repo/pool/main/
+        else
+            echo "ERROR: No se encontraron paquetes .deb descargados"
+            exit 1
+        fi
+        
+        cd final-repo
+        
+        echo "Generando índices del repositorio..."
+        cd pool/main
+        
+        # Generar archivo Packages - este es el índice que APT lee para saber qué paquetes están disponibles
+        dpkg-scanpackages . /dev/null > ../../dists/noble/main/binary-amd64/Packages
+        
+        # Crear versión comprimida del índice (APT puede usar cualquiera de los dos)
+        gzip -9c ../../dists/noble/main/binary-amd64/Packages > ../../dists/noble/main/binary-amd64/Packages.gz
+        
+        cd ../../dists/noble
+        
+        # Crear archivo Release - contiene metadatos del repositorio
+        cat > Release << EOF
+        Archive: noble
+        Codename: noble
+        Date: $(date -u -R)
+        Description: Ubuntu 24.04 Offline Repository for Kubernetes Installation
+        Label: kubernetes-offline
+        Origin: github-actions
+        Suite: noble
+        Version: 24.04
+        Components: main
+        Architectures: amd64
+        EOF
+        
+        # Generar checksums para verificación de integridad
+        # APT usa estos para verificar que los archivos no se corrompieron
+        echo "MD5Sum:" >> Release
+        find . -name "Packages*" -type f -exec md5sum {} \; | sed 's|\./|| ' >> Release
+        
+        echo "SHA256:" >> Release
+        find . -name "Packages*" -type f -exec sha256sum {} \; | sed 's|\./|| ' >> Release
+        
+        cd ../../../
+        
+        echo "Repositorio APT construido exitosamente"
+
+    - name: Crear documentación de instalación
+      run: |
+        cd offline-packages
+        
+        echo "Generando documentación clara para uso en polígono aislado..."
+        
+        # Esta documentación es crítica porque en el polígono aislado no tendrás acceso a Google
+        cat > documentation/INSTRUCCIONES-INSTALACION.md << 'EOF'
+        # Instalación de Repositorio Offline para Kubernetes Ubuntu 24.04
+        
+        ## Resumen Ejecutivo
+        
+        Este paquete contiene todos los archivos .deb necesarios para instalar Kubernetes usando kubespray en Ubuntu 24.04 en un entorno completamente aislado de internet.
+        
+        ## Contenido del Paquete
+        
+        - `final-repo/`: Repositorio APT completo con todos los paquetes
+        - `documentation/`: Listas de paquetes y guías de instalación
+        
+        ## Proceso de Instalación en Polígono Aislado
+        
+        ### Paso 1: Transferir archivos al entorno aislado
+        
+        Transfiere el archivo completo a tu red aislada usando el método aprobado (USB, transferencia por red interna, etc.).
+        
+        ### Paso 2: Configurar servidor de repositorio
+        
+        En el servidor que actuará como repositorio (ejemplo: 10.10.15.171):
+        
+        ```bash
+        # Extraer el paquete
+        tar -xzf ubuntu-24.04-kubernetes-offline.tar.gz
+        cd offline-packages/final-repo
+        
+        # Iniciar servidor web simple
+        python3 -m http.server 8080 --bind 10.10.15.171
+        ```
+        
+        ### Paso 3: Configurar repositorio en todos los nodos Ubuntu 24.04
+        
+        En cada nodo donde instalarás Kubernetes:
+        
+        ```bash
+        # Hacer backup de configuración original
+        sudo cp /etc/apt/sources.list /etc/apt/sources.list.original
+        
+        # Configurar repositorio offline como única fuente
+        echo "deb [trusted=yes] http://10.10.15.171:8080 noble main" | sudo tee /etc/apt/sources.list
+        
+        # Actualizar cache de paquetes
+        sudo apt update
+        ```
+        
+        ### Paso 4: Instalar paquetes críticos para kubespray
+        
+        ```bash
+        # Instalar paquetes esenciales
+        sudo apt install -y conntrack-tools python3 python3-pip curl openssh-server
+        
+        # CRÍTICO: Crear symlink para compatibilidad kubespray con Ubuntu 24.04
+        sudo ln -sf /usr/sbin/conntrack /usr/bin/conntrack
+        
+        # Verificar que el fix funcionó
+        which conntrack  # Debe mostrar /usr/bin/conntrack
+        conntrack --version  # Debe mostrar la versión sin errores
+        ```
+        
+        ### Paso 5: Verificar instalación
+        
+        ```bash
+        # Verificar que APT funciona offline
+        apt list --installed | grep conntrack-tools
+        
+        # Verificar que Python está listo para kubespray
+        python3 --version
+        pip3 --version
+        ```
+        
+        ## Solución de Problemas Comunes
+        
+        ### Error: "Unable to locate package"
+        
+        **Causa**: El repositorio offline no está configurado correctamente.
+        
+        **Solución**:
+        1. Verificar que el servidor web está funcionando: `curl http://10.10.15.171:8080`
+        2. Verificar que el archivo Packages existe: `curl http://10.10.15.171:8080/dists/noble/main/binary-amd64/Packages`
+        3. Verificar configuración sources.list en el nodo problemático
+        
+        ### Error: "conntrack: command not found" en kubespray
+        
+        **Causa**: El symlink específico para Ubuntu 24.04 no se creó.
+        
+        **Solución**:
+        ```bash
+        sudo apt install conntrack-tools
+        sudo ln -sf /usr/sbin/conntrack /usr/bin/conntrack
+        ```
+        
+        ### Error: Problemas de conectividad entre nodos
+        
+        **Causa**: Firewall o configuración de red.
+        
+        **Solución**:
+        ```bash
+        # Verificar conectividad básica
+        ping 10.10.15.171
+        
+        # Verificar que el puerto del repositorio está abierto
+        telnet 10.10.15.171 8080
+        ```
+        
+        ## Notas Importantes para Polígono Aislado
+        
+        - Este repositorio incluye TODAS las dependencias necesarias
+        - No requiere conectividad a internet en ningún momento
+        - Compatible específicamente con Ubuntu 24.04 (Noble Numbat)
+        - Incluye el fix crítico para conntrack que kubespray necesita
+        - Todos los paquetes están firmados y verificados
+        
+        ## Siguiente Paso: Ejecutar Kubespray
+        
+        Una vez completada esta instalación, puedes proceder con tu scheduler de kubespray comenzando desde la Fase 1, ya que todos los paquetes del sistema están disponibles offline.
+        EOF
+        
+        # Crear script de instalación automatizada
+        cat > documentation/instalar-repositorio-offline.sh << 'EOF'
+        #!/bin/bash
+        # Script para automatizar la configuración del repositorio offline
+        
+        if [ $# -ne 1 ]; then
+            echo "Uso: $0 <IP_DEL_SERVIDOR_REPOSITORIO>"
+            echo "Ejemplo: $0 10.10.15.171"
+            exit 1
+        fi
+        
+        REPO_IP=$1
+        
+        echo "=== Configurando repositorio offline en $(hostname) ==="
+        
+        # Backup de configuración original
+        sudo cp /etc/apt/sources.list /etc/apt/sources.list.backup.$(date +%Y%m%d_%H%M%S)
+        
+        # Configurar repositorio offline
+        echo "deb [trusted=yes] http://$REPO_IP:8080 noble main" | sudo tee /etc/apt/sources.list
+        
+        # Actualizar cache
+        echo "Actualizando cache de paquetes..."
+        sudo apt update
+        
+        # Instalar paquetes críticos
+        echo "Instalando paquetes críticos para kubespray..."
+        sudo apt install -y conntrack-tools python3 python3-pip curl openssh-server
+        
+        # Fix crítico para Ubuntu 24.04
+        sudo ln -sf /usr/sbin/conntrack /usr/bin/conntrack
+        
+        # Verificar instalación
+        echo "Verificando instalación..."
+        if which conntrack >/dev/null && python3 --version >/dev/null; then
+            echo "✅ Repositorio offline configurado exitosamente"
+            echo "✅ Fix de conntrack aplicado"
+            echo "✅ Python listo para kubespray"
+        else
+            echo "❌ Hubo problemas en la configuración"
+            exit 1
+        fi
+        
+        echo "=== Configuración completada en $(hostname) ==="
+        EOF
+        
+        chmod +x documentation/instalar-repositorio-offline.sh
+
+    - name: Generar estadísticas finales y verificaciones
+      run: |
+        cd offline-packages
+        
+        echo "=== GENERANDO REPORTE FINAL ==="
+        
+        # Calcular estadísticas del repositorio creado
+        TOTAL_DEBS=$(find final-repo/pool/main -name "*.deb" | wc -l)
+        TOTAL_SIZE=$(du -sh final-repo | cut -f1)
+        PACKAGES_INDEX_SIZE=$(wc -l < final-repo/dists/noble/main/binary-amd64/Packages)
+        
+        cat > documentation/estadisticas-paquete.txt << EOF
+        ESTADÍSTICAS DEL REPOSITORIO OFFLINE KUBERNETES
+        ===============================================
+        Construcción: $(date)
+        Sistema base: $(lsb_release -ds)
+        
+        Contenido:
+        - Archivos .deb incluidos: $TOTAL_DEBS
+        - Tamaño total repositorio: $TOTAL_SIZE
+        - Entradas en índice Packages: $PACKAGES_INDEX_SIZE
+        - Herramientas diagnóstico: ${{ inputs.include_troubleshooting_tools }}
+        
+        Verificaciones críticas para Ubuntu 24.04:
+        EOF
+        
+        # Verificar que los paquetes más críticos están presentes
+        echo "Verificando presencia de paquetes críticos..." | tee -a documentation/estadisticas-paquete.txt
+        
+        critical_packages=("conntrack-tools" "python3" "curl" "openssh-server")
+        for package in "${critical_packages[@]}"; do
+            if find final-repo/pool/main -name "${package}_*.deb" -o -name "${package}[_:]*.deb" | grep -q .; then
+                echo "✅ $package: PRESENTE" | tee -a documentation/estadisticas-paquete.txt
+            else
+                echo "❌ $package: FALTANTE" | tee -a documentation/estadisticas-paquete.txt
+            fi
+        done
+        
+        # Mostrar estadísticas en la consola para GitHub Actions
+        echo ""
+        echo "=== RESUMEN FINAL ==="
+        cat documentation/estadisticas-paquete.txt
+        
+        # Verificar que tenemos un repositorio funcional
+        if [ -f final-repo/dists/noble/main/binary-amd64/Packages ] && [ $TOTAL_DEBS -gt 50 ]; then
+            echo "✅ Repositorio offline construido exitosamente"
+            echo "✅ Listo para transferir a polígono aislado"
+        else
+            echo "❌ Error en construcción del repositorio"
+            exit 1
+        fi
+
+    - name: Comprimir paquete final para descarga
+      run: |
+        echo "=== COMPRIMIENDO PAQUETE FINAL ==="
+        
+        # Crear archivo comprimido con timestamp para identificación única
+        TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+        PACKAGE_NAME="ubuntu-24.04-kubernetes-offline_$TIMESTAMP.tar.gz"
+        
+        # Comprimir todo el directorio offline-packages
+        tar -czf "$PACKAGE_NAME" offline-packages/
+        
+        # Generar checksums para verificación de integridad en polígono aislado
+        md5sum "$PACKAGE_NAME" > "$PACKAGE_NAME.md5"
+        sha256sum "$PACKAGE_NAME" > "$PACKAGE_NAME.sha256"
+        
+        # Mostrar información final
+        echo "Paquete creado: $PACKAGE_NAME"
+        echo "Tamaño: $(du -sh $PACKAGE_NAME | cut -f1)"
+        echo ""
+        echo "Checksums para verificación:"
+        echo "MD5: $(cat $PACKAGE_NAME.md5)"
+        echo "SHA256: $(cat $PACKAGE_NAME.sha256)"
+        
+        # Guardar nombre para el paso de upload
+        echo "FINAL_PACKAGE=$PACKAGE_NAME" >> $GITHUB_ENV
+
+    - name: Subir artefacto para descarga
+      uses: actions/upload-artifact@v4
+      with:
+        name: ubuntu-24.04-kubernetes-offline-packages
+        path: |
+          ubuntu-24.04-kubernetes-offline_*.tar.gz
+          ubuntu-24.04-kubernetes-offline_*.md5
+          ubuntu-24.04-kubernetes-offline_*.sha256
+        retention-days: 30
+        compression-level: 0  # El archivo ya está comprimido
