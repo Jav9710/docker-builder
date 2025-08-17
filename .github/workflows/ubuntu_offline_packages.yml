@@ -92,6 +92,7 @@ jobs:
         
         # FIX CRÍTICO: Ubuntu 24.04 cambió el nombre del paquete conntrack
         # Kubespray busca 'conntrack' pero Ubuntu 24.04 lo tiene como 'conntrack-tools'
+        sshpass
         conntrack-tools
         ansible
         # Python ecosystem - kubespray está escrito en Python/Ansible
