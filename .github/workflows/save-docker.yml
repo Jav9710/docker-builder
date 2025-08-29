@@ -20,7 +20,9 @@ jobs:
         run: docker pull ${{ github.event.inputs.image_name }}
 
       - name: Guardar imagen Docker en archivo
-        run: docker save ${{ github.event.inputs.image_name }} | gzip > image.tar.gz
+        run: |
+          image_name="${{ github.event.inputs.image_name }}"
+          docker save "$image_name" | gzip > "${image_name//[:\/]/_}.tar.gz"
 
       - name: Subir imagen como artifact
         uses: actions/upload-artifact@v4
