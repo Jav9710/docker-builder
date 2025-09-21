@@ -1,7 +1,7 @@
 name: Build Backstage Docker Image from Scratch
 
 on:
-  workflow_dispatch:  # Ejecutable manualmente
+  workflow_dispatch:
   push:
     branches:
       - main
@@ -11,55 +11,46 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # 1. Checkout del repo
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # 2. Instalar Node.js
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 18
 
-      # 3. Instalar Yarn
       - name: Install Yarn
         run: npm install -g yarn
 
-      # 4. Crear app Backstage si no existe
       - name: Create Backstage app
         run: |
           if [ ! -d "my-backstage-app" ]; then
             npx @backstage/create-app my-backstage-app --skip-install --yes
           fi
 
-      # 5. Instalar dependencias
       - name: Install dependencies
         run: |
           cd my-backstage-app
           yarn install --frozen-lockfile
 
-      # 6. Construir backend + frontend
       - name: Build backend
         run: |
           cd my-backstage-app
           yarn build:backend
 
-      # 7. Construir imagen Docker
       - name: Build Docker image
         run: |
           cd my-backstage-app
           IMAGE_NAME=backstage:latest
           docker build -f packages/backend/Dockerfile -t $IMAGE_NAME .
 
-      # 8. Guardar la imagen como artifact
       - name: Save Docker image as artifact
         run: |
           mkdir -p docker-artifacts
           docker save backstage:latest -o docker-artifacts/backstage.tar
 
-      # 9. Subir artifact a GitHub Actions
       - name: Upload Docker image artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: backstage-docker-image
           path: docker-artifacts/backstage.tar
