@@ -1,12 +1,12 @@
-name: Build Docker Image from exo
+name: Build Docker Image from simstudioai/sim
 
 on:
   workflow_dispatch:
     inputs:
       image_tag:
-        description: 'Etiqueta para la imagen Docker (e.g. exo:latest)'
+        description: 'Etiqueta para la imagen Docker (e.g. sim:latest)'
         required: true
-        default: 'exo:latest'
+        default: 'sim:latest'
 
 jobs:
   build:
@@ -16,51 +16,15 @@ jobs:
       - name: Verificar espacio libre en disco
         run: df -h
 
-      - name: Crear Dockerfile dinámico
+      - name: Clonar repositorio simstudioai/sim
         run: |
-          cat <<EOF > Dockerfile
-          FROM python:3.12.10
-
-          WORKDIR /app
-
-          # Instalar dependencias del sistema
-          RUN apt-get update && apt-get install -y --no-install-recommends \
-                  git \
-                  build-essential \
-                  python3-dev \
-                  libffi-dev \
-                  libssl-dev \
-                  wget \
-                  bash \
-                  libstdc++6 \
-                  make \
-                  gcc \
-                  g++ \
-                  linux-headers-generic \
-               && apt-get clean && rm -rf /var/lib/apt/lists/*
-
-
-          # Clonar EXO
-          RUN git clone https://github.com/exo-explore/exo.git /app
-
-          # Copiar y dar permisos a install.sh
-          RUN chmod +x install.sh && bash install.sh
-
-          # Instalar dependencias Python
-          RUN pip install --upgrade pip setuptools wheel && \
-              pip install -e . && \
-              pip install opencv-python-headless==4.11.0.86 protobuf==5.28.1 tensorflow==2.17.0 torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
-          RUN pip cache purge              
-
-          # Limpiar pip cache
-          RUN pip cache purge
-
-          CMD ["bash"]
-          EOF
+          git clone https://github.com/simstudioai/sim.git
 
       - name: Construir imagen Docker
         run: |
-          docker build -t ${{ github.event.inputs.image_tag }} .
+          docker build -t ${{ github.event.inputs.image_tag }} \
+            -f sim/docker/realtime.Dockerfile \
+            sim
 
       - name: Mostrar tamaño de imagen construida
         run: |
@@ -73,12 +37,11 @@ jobs:
 
       - name: Comprimir imagen Docker usando zstd
         run: |
-          docker save ${{ github.event.inputs.image_tag }} | zstd -19 -T0 -o exo_image.tar.zst
-          ls -lh exo_image.tar.zst
+          docker save ${{ github.event.inputs.image_tag }} | zstd -19 -T0 -o sim_image.tar.zst
+          ls -lh sim_image.tar.zst
 
       - name: Subir artifact (imagen Docker comprimida)
         uses: actions/upload-artifact@v4
         with:
-          name: exo-docker-image
-          path: exo_image.tar.zst
-
+          name: sim-docker-image
+          path: sim_image.tar.zst
